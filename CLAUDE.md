@@ -84,6 +84,12 @@ Verified live on the web client, 0.0.18 / desktop v1.0.18 era (2026-08-03):
   and the tree line is muted via guid-targeted CSS (`opacity:.55; font-style:italic`,
   second injected style tag). Collapse removes the line from the DOM → the sidenote
   returns within one 1200ms tick (collapse fires no lineitem event; the tick catches it).
+- **Plugins must not delete lines in the open document.** The margin editor originally
+  deleted the `#ctx` line when its text was cleared; a subsequent ⌘Z crashed the app
+  with `EDITOR_TREE_CORRUPTION: prev_sibling not found in parent.children` (2026-08-03)
+  — the editor's undo stack can't see SDK structural writes. Persisted data was fine
+  (in-memory guard only; reload rebuilt cleanly). Clearing now empties the line's
+  segments instead (`setSegments`, a content op), and empty notes aren't rendered.
 - Native collapse/expand does NOT respond to synthetic `.click()` on
   `.line-fold-chevron` — needs a trusted event (CDP `Input.dispatchMouseEvent` works).
 - Deploy loop used: `./build.sh .` then

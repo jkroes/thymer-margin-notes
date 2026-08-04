@@ -21,7 +21,7 @@ purely a different way of showing it:
 |---|---|
 | Add a note to a line | Add a child line, then `⌘P` → **Margin Notes: toggle #ctx on current line** — or type the child starting with `#ctx` |
 | Edit a note | Click the sidenote (or open its popover, then click it) |
-| Delete a note | Edit it and clear the text |
+| Delete a note | Clear its text (leaves a bare `#ctx` line in the outline — delete that line yourself) |
 | Turn a note back into normal content | Same palette command, cursor on the `#ctx` line |
 | Hide/show all margin notes | Click **Margin Notes** in the status bar (per-device) |
 

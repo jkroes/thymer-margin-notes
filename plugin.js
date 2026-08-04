@@ -145,7 +145,8 @@ export class Plugin extends AppPlugin {
                         const first = segs[0];
                         if (first && first.type === "hashtag" && String(first.text).toLowerCase() === CTX_TAG) {
                             noteGuids.add(kid.guid);
-                            notes.push({ guid: kid.guid, item: kid, text: this._segText(segs.slice(1)) });
+                            const text = this._segText(segs.slice(1));
+                            if (text) notes.push({ guid: kid.guid, item: kid, text });
                         }
                     }
                     if (notes.length) {
@@ -377,8 +378,13 @@ export class Plugin extends AppPlugin {
         this._editing = null;
         card.remove();
         try {
-            if (!text) await note.item.delete();
-            else if (text !== note.text)
+            // Never delete the line: a structural write the editor's undo stack can't
+            // see makes a later ⌘Z crash the app (EDITOR_TREE_CORRUPTION, 2026-08-03).
+            // Clearing leaves a bare #ctx line for the user to delete in the outline.
+            if (!text) {
+                await note.item.setSegments([{ type: "hashtag", text: CTX_TAG }]);
+                this.ui.addToaster({ title: "Margin Notes", message: "Note cleared — delete the empty #ctx line in the outline to remove it", dismissible: true, autoDestroyTime: 4000 });
+            } else if (text !== note.text)
                 await note.item.setSegments([{ type: "hashtag", text: CTX_TAG }, { type: "text", text: " " + text }]);
         } catch (e) {
             console.warn("[margin-notes] save failed", e);
