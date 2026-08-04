@@ -260,7 +260,14 @@ export class Plugin extends AppPlugin {
         if (!this._enabled || this._editing) return;
         const line = e.target?.closest?.('.listitem[data-guid]');
         if (!line) {
-            if (this._plusEl && e.target !== this._plusEl) this._removePlus();
+            // The + floats outside the row element, so crossing the gap toward it fires
+            // mousemoves with no .listitem target. Keep it while the cursor is nearby.
+            if (this._plusEl) {
+                const r = this._plusEl.getBoundingClientRect();
+                const near = e.clientX >= r.left - 40 && e.clientX <= r.right + 24 &&
+                             e.clientY >= r.top - 14 && e.clientY <= r.bottom + 14;
+                if (!near) this._removePlus();
+            }
             return;
         }
         const guid = line.getAttribute("data-guid");
