@@ -19,14 +19,13 @@ purely a different way of showing it:
 
 | Action | How |
 |---|---|
-| Add a note to a line | Hover the line → click the dashed `+` in the margin → type → `Enter` |
+| Add a note to a line | Add a child line, then `⌘P` → **Margin Notes: toggle #ctx on current line** — or type the child starting with `#ctx` |
 | Edit a note | Click the sidenote (or open its popover, then click it) |
 | Delete a note | Edit it and clear the text |
-| Make the current line a note of its parent | `⌘P` → **Margin Notes: toggle #ctx on current line** (also converts back) |
+| Turn a note back into normal content | Same palette command, cursor on the `#ctx` line |
 | Hide/show all margin notes | Click **Margin Notes** in the status bar (per-device) |
 
-You can also just type a child line starting with `#ctx` — the marker must be the
-line's first segment.
+The `#ctx` marker must be the line's first segment.
 
 ## Install
 

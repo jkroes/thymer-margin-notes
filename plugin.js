@@ -4,9 +4,10 @@
 // A note is a real child line tagged #ctx under the annotated line. This plugin renders
 // those notes OUTSIDE the editor: as serif sidenotes in the right margin when the panel
 // is wide enough, or as click-to-open popovers behind a small glyph when it isn't.
-// Hovering a line shows a + in the margin; typing there writes the #ctx child back
-// through the SDK. The editor DOM is never mutated — the overlay is our own layer in
-// document.body, positioned by reading row geometry (.listitem[data-guid]).
+// Notes are edited by clicking them; lines become notes via the palette command
+// ("toggle #ctx on current line") or by typing a #ctx child directly. The editor DOM
+// is never mutated — the overlay is our own layer in document.body, positioned by
+// reading row geometry (.listitem[data-guid]).
 
 const CTX_TAG = "#ctx";
 const SIDENOTE_MIN_GUTTER = 190; // px of free margin needed to render sidenotes
@@ -24,11 +25,6 @@ const CSS = `
     display: flex; align-items: center; justify-content: center; cursor: pointer;
     background: transparent; padding: 0; }
   .mn-glyph:hover { background: rgba(194, 156, 104, .18); }
-  .mn-plus { position: fixed; width: 18px; height: 18px; border-radius: 50%;
-    border: 1px dashed #8d7549; color: #8d7549; font: 400 13px/1 sans-serif;
-    display: flex; align-items: center; justify-content: center; cursor: pointer;
-    background: transparent; padding: 0; opacity: .75; }
-  .mn-plus:hover { opacity: 1; background: rgba(194, 156, 104, .18); }
   .mn-pop { position: fixed; width: 270px; background: #282d37; border: 1px solid #3d4350;
     border-radius: 8px; padding: 9px 11px; font: 12.5px/1.5 Georgia, serif; font-style: italic;
     color: #d3b586; box-shadow: 0 8px 28px rgba(0,0,0,.5); }
@@ -97,9 +93,6 @@ export class Plugin extends AppPlugin {
         document.addEventListener("scroll", this._onScroll, { capture: true, passive: true });
         window.addEventListener("resize", this._onResize);
 
-        this._onMove = (e) => this._hover(e);
-        document.addEventListener("mousemove", this._onMove, { passive: true });
-
         // Catch re-renders, collapses, and virtualization the events don't cover.
         this._tick = setInterval(() => this._reposition(), 1200);
 
@@ -111,7 +104,6 @@ export class Plugin extends AppPlugin {
         clearInterval(this._tick);
         document.removeEventListener("scroll", this._onScroll, { capture: true });
         window.removeEventListener("resize", this._onResize);
-        document.removeEventListener("mousemove", this._onMove);
         this._root?.remove();
         document.getElementById(STYLE_ID)?.remove();
         document.getElementById(MUTE_STYLE_ID)?.remove();
@@ -297,54 +289,6 @@ export class Plugin extends AppPlugin {
                 r.el.style.top = rect.top + (rect.height - 16) / 2 + "px";
             }
         }
-        if (this._plusEl && this._plusAnchor) this._placePlus();
-    }
-
-    // ---- hover + ----
-
-    _hover(e) {
-        if (!this._enabled || this._editing) return;
-        const line = e.target?.closest?.('.listitem[data-guid]');
-        if (!line) {
-            // The + floats outside the row element, so crossing the gap toward it fires
-            // mousemoves with no .listitem target. Keep it while the cursor is nearby.
-            if (this._plusEl) {
-                const r = this._plusEl.getBoundingClientRect();
-                const near = e.clientX >= r.left - 40 && e.clientX <= r.right + 24 &&
-                             e.clientY >= r.top - 14 && e.clientY <= r.bottom + 14;
-                if (!near) this._removePlus();
-            }
-            return;
-        }
-        const guid = line.getAttribute("data-guid");
-        if (this._noteGuids.has(guid)) { this._removePlus(); return; }
-        if (this._model.some((m) => m.anchorGuid === guid)) { this._removePlus(); return; }
-        if (this._plusAnchor === guid) return;
-        this._removePlus();
-        this._plusAnchor = guid;
-        const btn = document.createElement("button");
-        btn.className = "mn-plus";
-        btn.textContent = "+";
-        btn.title = "Add margin note";
-        btn.addEventListener("click", (ev) => { ev.stopPropagation(); this._openEditor(guid, null); });
-        this._root.appendChild(btn);
-        this._plusEl = btn;
-        this._placePlus();
-    }
-
-    _placePlus() {
-        const anchor = this._anchorEl(this._plusAnchor);
-        if (!anchor) { this._removePlus(); return; }
-        const rect = anchor.getBoundingClientRect();
-        const gutter = this._gutterFor(anchor);
-        this._plusEl.style.left = (gutter >= SIDENOTE_MIN_GUTTER ? rect.right + 14 : rect.right + 4) + "px";
-        this._plusEl.style.top = rect.top + (rect.height - 18) / 2 + "px";
-    }
-
-    _removePlus() {
-        this._plusEl?.remove();
-        this._plusEl = null;
-        this._plusAnchor = null;
     }
 
     // ---- popover (narrow mode) ----
@@ -384,7 +328,6 @@ export class Plugin extends AppPlugin {
     _openEditor(anchorGuid, note) {
         this._closeEditor();
         this._closePop();
-        this._removePlus();
         const anchor = this._anchorEl(anchorGuid);
         if (!anchor) return;
         const rect = anchor.getBoundingClientRect();
@@ -429,29 +372,14 @@ export class Plugin extends AppPlugin {
 
     async _saveEditor() {
         if (!this._editing) return;
-        const { card, anchorGuid, note } = this._editing;
+        const { card, note } = this._editing;
         const text = card.innerText.replace(/\s+/g, " ").trim();
         this._editing = null;
         card.remove();
         try {
-            if (note) {
-                if (!text) await note.item.delete();
-                else if (text !== note.text)
-                    await note.item.setSegments([{ type: "hashtag", text: CTX_TAG }, { type: "text", text: " " + text }]);
-            } else if (text) {
-                const rec = this.ui.getActivePanel()?.getActiveRecord();
-                let parentItem = this._allItems?.get(anchorGuid);
-                if (rec && !parentItem) {
-                    await this._refresh(); // line may be newer than the last read
-                    parentItem = this._allItems?.get(anchorGuid);
-                }
-                if (rec && parentItem) {
-                    await rec.createLineItem(parentItem, null, "text",
-                        [{ type: "hashtag", text: CTX_TAG }, { type: "text", text: " " + text }], null);
-                } else {
-                    this.ui.addToaster({ title: "Margin Notes", message: "Couldn't resolve the line", dismissible: true, autoDestroyTime: 3000 });
-                }
-            }
+            if (!text) await note.item.delete();
+            else if (text !== note.text)
+                await note.item.setSegments([{ type: "hashtag", text: CTX_TAG }, { type: "text", text: " " + text }]);
         } catch (e) {
             console.warn("[margin-notes] save failed", e);
             this.ui.addToaster({ title: "Margin Notes", message: "Note save failed", dismissible: true, autoDestroyTime: 3000 });
