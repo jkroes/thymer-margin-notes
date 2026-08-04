@@ -26,8 +26,11 @@ const CSS = `
     background: transparent; padding: 0; }
   .mn-glyph:hover { background: rgba(194, 156, 104, .18); }
   .mn-pop { position: fixed; width: 270px; background: #282d37; border: 1px solid #3d4350;
-    border-radius: 8px; padding: 9px 11px; font: 12.5px/1.5 Georgia, serif; font-style: italic;
+    border-radius: 8px; padding: 4px 0; font: 12.5px/1.5 Georgia, serif; font-style: italic;
     color: #d3b586; box-shadow: 0 8px 28px rgba(0,0,0,.5); }
+  .mn-pop-row { padding: 5px 11px; cursor: pointer; }
+  .mn-pop-row:hover { background: rgba(194, 156, 104, .12); }
+  .mn-pop-row + .mn-pop-row { border-top: 1px solid #343945; }
   .mn-edit { position: fixed; min-height: 20px; background: rgba(40,45,55,.96);
     border: 1px solid #8d7549; border-radius: 6px; padding: 6px 9px;
     font: italic 12.5px/1.5 Georgia, serif; color: #e0c08a; outline: none;
@@ -61,6 +64,16 @@ export class Plugin extends AppPlugin {
 
         this._root = document.createElement("div");
         this._root.className = "mn-root";
+        // Swallow raw mouse events so Thymer's document-level coordinate handlers
+        // (caret placement, block selection) never react to clicks on the overlay.
+        // preventDefault on mousedown also keeps focus in the editor — except in
+        // the edit card, which needs focus to type.
+        for (const evName of ["mousedown", "mouseup", "dblclick"]) {
+            this._root.addEventListener(evName, (e) => {
+                e.stopPropagation();
+                if (evName === "mousedown" && !e.target.closest(".mn-edit")) e.preventDefault();
+            });
+        }
         document.body.appendChild(this._root);
 
         // One palette command per plugin, so display on/off lives on the status bar
@@ -288,10 +301,12 @@ export class Plugin extends AppPlugin {
                 r.el.style.top = top + "px";
                 lastBottom = top + r.el.offsetHeight;
             } else {
+                // One glyph per line regardless of note count; the popover stacks them.
+                if (r.index > 0) { r.el.style.display = "none"; continue; }
                 r.el.className = "mn-glyph";
-                r.el.textContent = "✻"; // ✻
+                r.el.textContent = "✻";
                 r.el.style.width = "";
-                r.el.style.left = rect.right + 4 + r.index * 20 + "px";
+                r.el.style.left = rect.right + 4 + "px";
                 r.el.style.top = rect.top + (rect.height - 16) / 2 + "px";
             }
         }
@@ -303,18 +318,24 @@ export class Plugin extends AppPlugin {
         if (el.classList.contains("mn-note")) {
             this._openEditor(entry.anchorGuid, note);
         } else {
-            if (this._pop?.dataset.note === note.guid) { this._closePop(); return; }
+            if (this._pop?.dataset.anchor === entry.anchorGuid) { this._closePop(); return; }
             this._closePop();
             const anchor = this._anchorEl(entry.anchorGuid);
             if (!anchor) return;
             const rect = anchor.getBoundingClientRect();
             const pop = document.createElement("div");
             pop.className = "mn-pop";
-            pop.dataset.note = note.guid;
-            pop.textContent = note.text || "(empty note)";
+            pop.dataset.anchor = entry.anchorGuid;
+            for (const n of entry.notes) {
+                const row = document.createElement("div");
+                row.className = "mn-pop-row";
+                row.textContent = n.text;
+                row.addEventListener("click", (e) => { e.stopPropagation(); this._closePop(); this._openEditor(entry.anchorGuid, n); });
+                pop.appendChild(row);
+            }
             pop.style.left = Math.min(rect.left + 150, innerWidth - 300) + "px";
             pop.style.top = rect.bottom + 4 + "px";
-            pop.addEventListener("click", (e) => { e.stopPropagation(); this._closePop(); this._openEditor(entry.anchorGuid, note); });
+            pop.addEventListener("click", (e) => e.stopPropagation());
             this._root.appendChild(pop);
             this._pop = pop;
             this._outside = (e) => { if (!pop.contains(e.target)) this._closePop(); };
