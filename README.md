@@ -49,5 +49,13 @@ scroll, resize, line-item events, and a periodic tick. The in-tree muting of exp
 `#ctx` lines is done with guid-targeted CSS rules only. If a Thymer release changes the
 editor's markup, notes misplace or vanish — the data is untouched.
 
+**Why doesn't clearing a note delete its line?** Thymer's undo stack only knows about
+edits you make in the editor. If the plugin deleted the line and you later pressed
+`⌘Z`, undo could replay an operation anchored to the missing line and crash the app
+with an `EDITOR_TREE_CORRUPTION` error (your data survives — reload recovers — but
+it's a hard stop). So the plugin only ever rewrites a line's *content*, never
+adds, deletes, or moves lines. Clearing a note empties it to the bare `#ctx` marker,
+and removing the line is left to you, in the outline, where undo can see it.
+
 Built against the 0.0.18-era client (2026-08). Development notes and live-verified API
 quirks are in `CLAUDE.md`.
