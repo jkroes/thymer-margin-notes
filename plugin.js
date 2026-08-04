@@ -1,0 +1,395 @@
+/// <reference path="./sdk/types.d.ts" />
+// Margin Notes — Tufte-style contextual content for Thymer.
+//
+// A note is a real child line tagged #ctx under the annotated line. This plugin renders
+// those notes OUTSIDE the editor: as serif sidenotes in the right margin when the panel
+// is wide enough, or as click-to-open popovers behind a small glyph when it isn't.
+// Hovering a line shows a + in the margin; typing there writes the #ctx child back
+// through the SDK. The editor DOM is never mutated — the overlay is our own layer in
+// document.body, positioned by reading row geometry (.listitem[data-guid]).
+
+const CTX_TAG = "#ctx";
+const SIDENOTE_MIN_GUTTER = 190; // px of free margin needed to render sidenotes
+const NOTE_WIDTH_MAX = 260;
+const STYLE_ID = "margin-notes-style";
+const CSS = `
+  .mn-root { position: fixed; inset: 0 auto auto 0; width: 0; height: 0; z-index: 480; pointer-events: none; }
+  .mn-root > * { pointer-events: auto; }
+  .mn-note { position: fixed; font: italic 12.5px/1.5 Georgia, "Times New Roman", serif;
+    color: #c29c68; cursor: pointer; }
+  .mn-note:hover { color: #e0b87d; }
+  .mn-glyph { position: fixed; width: 16px; height: 16px; border-radius: 50%;
+    border: 1px solid #8d7549; color: #c29c68; font: italic 700 10px Georgia, serif;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    background: transparent; padding: 0; }
+  .mn-glyph:hover { background: rgba(194, 156, 104, .18); }
+  .mn-plus { position: fixed; width: 18px; height: 18px; border-radius: 50%;
+    border: 1px dashed #8d7549; color: #8d7549; font: 400 13px/1 sans-serif;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    background: transparent; padding: 0; opacity: .75; }
+  .mn-plus:hover { opacity: 1; background: rgba(194, 156, 104, .18); }
+  .mn-pop { position: fixed; width: 270px; background: #282d37; border: 1px solid #3d4350;
+    border-radius: 8px; padding: 9px 11px; font: 12.5px/1.5 Georgia, serif; font-style: italic;
+    color: #d3b586; box-shadow: 0 8px 28px rgba(0,0,0,.5); }
+  .mn-edit { position: fixed; min-height: 20px; background: rgba(40,45,55,.96);
+    border: 1px solid #8d7549; border-radius: 6px; padding: 6px 9px;
+    font: italic 12.5px/1.5 Georgia, serif; color: #e0c08a; outline: none;
+    box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+  .mn-edit:empty::before { content: "context\\2026"; color: #8d7549; }
+  body.mn-light .mn-note { color: #97743d; }
+  body.mn-light .mn-note:hover { color: #7a5c2e; }
+  body.mn-light .mn-pop { background: #f6f2ea; border-color: #d8c9ad; color: #6b5327; }
+  body.mn-light .mn-edit { background: #f6f2ea; color: #5c4720; }
+`;
+
+export class Plugin extends AppPlugin {
+    onLoad() {
+        this._enabled = localStorage.getItem("mn-enabled") !== "0";
+        this._model = [];            // [{anchorGuid, notes: [{guid, text, item}]}]
+        this._items = new Map();     // lineGuid -> PluginLineItem (anchors)
+        this._noteGuids = new Set(); // guids of #ctx lines themselves
+        this._rendered = [];         // [{el, anchorGuid, kind, index}]
+        this._editing = null;        // open editor card, if any
+        this._pop = null;            // open popover, if any
+        this._handlers = [];
+
+        const style = document.createElement("style");
+        style.id = STYLE_ID;
+        style.textContent = CSS;
+        document.head.appendChild(style);
+
+        this._root = document.createElement("div");
+        this._root.className = "mn-root";
+        document.body.appendChild(this._root);
+
+        this.ui.addCommandPaletteCommand({
+            label: "Margin Notes: toggle",
+            icon: "ti-notes",
+            onSelected: () => {
+                this._enabled = !this._enabled;
+                localStorage.setItem("mn-enabled", this._enabled ? "1" : "0");
+                this._enabled ? this._refreshSoon(0) : this._clear();
+                this.ui.addToaster({ title: "Margin Notes", message: "Margin notes " + (this._enabled ? "on" : "off"), dismissible: true, autoDestroyTime: 2000 });
+            },
+        });
+
+        for (const ev of ["panel.navigated", "panel.focused"])
+            this._handlers.push(this.events.on(ev, () => this._refreshSoon(150)));
+        for (const ev of ["lineitem.created", "lineitem.updated", "lineitem.moved", "lineitem.deleted", "lineitem.undeleted"])
+            this._handlers.push(this.events.on(ev, () => this._refreshSoon(300)));
+
+        this._onScroll = () => this._reposition();
+        this._onResize = () => this._refreshSoon(150);
+        document.addEventListener("scroll", this._onScroll, { capture: true, passive: true });
+        window.addEventListener("resize", this._onResize);
+
+        this._onMove = (e) => this._hover(e);
+        document.addEventListener("mousemove", this._onMove, { passive: true });
+
+        // Catch re-renders, collapses, and virtualization the events don't cover.
+        this._tick = setInterval(() => this._reposition(), 1200);
+
+        this._refreshSoon(400);
+    }
+
+    onUnload() {
+        for (const h of this._handlers) this.events.off(h);
+        clearInterval(this._tick);
+        document.removeEventListener("scroll", this._onScroll, { capture: true });
+        window.removeEventListener("resize", this._onResize);
+        document.removeEventListener("mousemove", this._onMove);
+        this._root?.remove();
+        document.getElementById(STYLE_ID)?.remove();
+    }
+
+    // ---- data ----
+
+    _refreshSoon(ms) {
+        clearTimeout(this._refreshTimer);
+        this._refreshTimer = setTimeout(() => this._refresh(), ms);
+    }
+
+    async _refresh() {
+        if (!this._enabled) return;
+        if (this._editing) { this._refreshSoon(1000); return; } // don't kill an open editor card
+        const rec = this.ui.getActivePanel()?.getActiveRecord();
+        if (!rec) { this._clear(); return; }
+        const recGuid = rec.guid;
+        let model = [];
+        const items = new Map();
+        const allItems = new Map();
+        const noteGuids = new Set();
+        try {
+            // Live client (0.0.18): getLineItems returns a FLAT list of all items, and
+            // `children` is a prototype getter returning child item objects; the
+            // getChildren() documented in types.d.ts does not exist yet. Walk with a
+            // visited-set so flat list + recursion can't double-count.
+            const top = await rec.getLineItems();
+            const visited = new Set();
+            const walk = async (list) => {
+                for (const item of list || []) {
+                    if (!item || visited.has(item.guid)) continue;
+                    visited.add(item.guid);
+                    allItems.set(item.guid, item);
+                    const kids = await this._childrenOf(item);
+                    const notes = [];
+                    for (const kid of kids || []) {
+                        const segs = kid.segments || [];
+                        const first = segs[0];
+                        if (first && first.type === "hashtag" && String(first.text).toLowerCase() === CTX_TAG) {
+                            noteGuids.add(kid.guid);
+                            notes.push({ guid: kid.guid, item: kid, text: this._segText(segs.slice(1)) });
+                        }
+                    }
+                    if (notes.length) {
+                        items.set(item.guid, item);
+                        model.push({ anchorGuid: item.guid, notes });
+                    }
+                    await walk(kids);
+                }
+            };
+            await walk(top);
+        } catch (e) {
+            console.warn("[margin-notes] read failed", e);
+            return;
+        }
+        // Stale-response guard: panel may have navigated while we were reading.
+        if (this.ui.getActivePanel()?.getActiveRecord()?.guid !== recGuid) return;
+        this._model = model;
+        this._items = items;
+        this._allItems = allItems;
+        this._noteGuids = noteGuids;
+        this._render();
+    }
+
+    async _childrenOf(item) {
+        if (typeof item.getChildren === "function") return (await item.getChildren()) || [];
+        return Array.isArray(item.children) ? item.children : [];
+    }
+
+    _segText(segs) {
+        return (segs || []).map((s) => {
+            const t = s.text;
+            if (t && typeof t === "object") return t.title || "";
+            return typeof t === "string" ? t : "";
+        }).join("").trim();
+    }
+
+    // ---- rendering ----
+
+    _clear() {
+        this._closeEditor();
+        this._closePop();
+        this._root.replaceChildren();
+        this._rendered = [];
+    }
+
+    _anchorEl(guid) {
+        return document.querySelector(`.listitem[data-guid="${guid}"]`);
+    }
+
+    _gutterFor(el) {
+        const scroller = el.closest(".panel-scroller-y");
+        if (!scroller) return 0;
+        return scroller.getBoundingClientRect().right - el.getBoundingClientRect().right;
+    }
+
+    _render() {
+        this._clear();
+        if (!this._enabled) return;
+        for (const entry of this._model) {
+            entry.notes.forEach((note, i) => {
+                const el = document.createElement("div");
+                el.dataset.anchor = entry.anchorGuid;
+                el.addEventListener("click", (e) => { e.stopPropagation(); this._onNoteClick(entry, note, el); });
+                this._root.appendChild(el);
+                this._rendered.push({ el, anchorGuid: entry.anchorGuid, note, index: i });
+            });
+        }
+        this._reposition();
+    }
+
+    _reposition() {
+        if (!this._rendered.length && !this._editing) return;
+        let lastBottom = -1e9;
+        for (const r of this._rendered) {
+            const anchor = this._anchorEl(r.anchorGuid);
+            if (!anchor) { r.el.style.display = "none"; continue; }
+            const rect = anchor.getBoundingClientRect();
+            if (rect.bottom < -40 || rect.top > innerHeight + 40) { r.el.style.display = "none"; continue; }
+            const gutter = this._gutterFor(anchor);
+            const side = gutter >= SIDENOTE_MIN_GUTTER;
+            r.el.style.display = "";
+            if (side) {
+                r.el.className = "mn-note";
+                r.el.textContent = r.note.text || "(empty note)";
+                r.el.style.width = Math.min(gutter - 30, NOTE_WIDTH_MAX) + "px";
+                r.el.style.left = rect.right + 14 + "px";
+                let top = rect.top + r.index * 18;
+                if (top < lastBottom + 8) top = lastBottom + 8;
+                r.el.style.top = top + "px";
+                lastBottom = top + r.el.offsetHeight;
+            } else {
+                r.el.className = "mn-glyph";
+                r.el.textContent = "✻"; // ✻
+                r.el.style.width = "";
+                r.el.style.left = rect.right + 4 + r.index * 20 + "px";
+                r.el.style.top = rect.top + (rect.height - 16) / 2 + "px";
+            }
+        }
+        if (this._plusEl && this._plusAnchor) this._placePlus();
+    }
+
+    // ---- hover + ----
+
+    _hover(e) {
+        if (!this._enabled || this._editing) return;
+        const line = e.target?.closest?.('.listitem[data-guid]');
+        if (!line) {
+            if (this._plusEl && e.target !== this._plusEl) this._removePlus();
+            return;
+        }
+        const guid = line.getAttribute("data-guid");
+        if (this._noteGuids.has(guid)) { this._removePlus(); return; }
+        if (this._model.some((m) => m.anchorGuid === guid)) { this._removePlus(); return; }
+        if (this._plusAnchor === guid) return;
+        this._removePlus();
+        this._plusAnchor = guid;
+        const btn = document.createElement("button");
+        btn.className = "mn-plus";
+        btn.textContent = "+";
+        btn.title = "Add margin note";
+        btn.addEventListener("click", (ev) => { ev.stopPropagation(); this._openEditor(guid, null); });
+        this._root.appendChild(btn);
+        this._plusEl = btn;
+        this._placePlus();
+    }
+
+    _placePlus() {
+        const anchor = this._anchorEl(this._plusAnchor);
+        if (!anchor) { this._removePlus(); return; }
+        const rect = anchor.getBoundingClientRect();
+        const gutter = this._gutterFor(anchor);
+        this._plusEl.style.left = (gutter >= SIDENOTE_MIN_GUTTER ? rect.right + 14 : rect.right + 4) + "px";
+        this._plusEl.style.top = rect.top + (rect.height - 18) / 2 + "px";
+    }
+
+    _removePlus() {
+        this._plusEl?.remove();
+        this._plusEl = null;
+        this._plusAnchor = null;
+    }
+
+    // ---- popover (narrow mode) ----
+
+    _onNoteClick(entry, note, el) {
+        if (el.classList.contains("mn-note")) {
+            this._openEditor(entry.anchorGuid, note);
+        } else {
+            if (this._pop?.dataset.note === note.guid) { this._closePop(); return; }
+            this._closePop();
+            const anchor = this._anchorEl(entry.anchorGuid);
+            if (!anchor) return;
+            const rect = anchor.getBoundingClientRect();
+            const pop = document.createElement("div");
+            pop.className = "mn-pop";
+            pop.dataset.note = note.guid;
+            pop.textContent = note.text || "(empty note)";
+            pop.style.left = Math.min(rect.left + 150, innerWidth - 300) + "px";
+            pop.style.top = rect.bottom + 4 + "px";
+            pop.addEventListener("click", (e) => { e.stopPropagation(); this._closePop(); this._openEditor(entry.anchorGuid, note); });
+            this._root.appendChild(pop);
+            this._pop = pop;
+            this._outside = (e) => { if (!pop.contains(e.target)) this._closePop(); };
+            setTimeout(() => document.addEventListener("click", this._outside), 0);
+        }
+    }
+
+    _closePop() {
+        if (!this._pop) return;
+        document.removeEventListener("click", this._outside);
+        this._pop.remove();
+        this._pop = null;
+    }
+
+    // ---- authoring ----
+
+    _openEditor(anchorGuid, note) {
+        this._closeEditor();
+        this._closePop();
+        this._removePlus();
+        const anchor = this._anchorEl(anchorGuid);
+        if (!anchor) return;
+        const rect = anchor.getBoundingClientRect();
+        const gutter = this._gutterFor(anchor);
+        const side = gutter >= SIDENOTE_MIN_GUTTER;
+        const card = document.createElement("div");
+        card.className = "mn-edit";
+        card.contentEditable = "true";
+        card.textContent = note ? note.text : "";
+        if (side) {
+            card.style.left = rect.right + 14 + "px";
+            card.style.top = rect.top + "px";
+            card.style.width = Math.min(gutter - 30, NOTE_WIDTH_MAX) + "px";
+        } else {
+            card.style.left = Math.min(rect.left + 150, innerWidth - 300) + "px";
+            card.style.top = rect.bottom + 4 + "px";
+            card.style.width = "270px";
+        }
+        card.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this._saveEditor(); }
+            if (e.key === "Escape") { e.preventDefault(); this._closeEditor(); }
+        });
+        card.addEventListener("blur", () => this._saveEditor());
+        this._root.appendChild(card);
+        this._editing = { card, anchorGuid, note };
+        card.focus();
+        // place caret at end
+        const sel = getSelection(), range = document.createRange();
+        range.selectNodeContents(card);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+
+    _closeEditor() {
+        if (!this._editing) return;
+        const { card } = this._editing;
+        this._editing = null;
+        card.remove();
+    }
+
+    async _saveEditor() {
+        if (!this._editing) return;
+        const { card, anchorGuid, note } = this._editing;
+        const text = card.innerText.replace(/\s+/g, " ").trim();
+        this._editing = null;
+        card.remove();
+        try {
+            if (note) {
+                if (!text) await note.item.delete();
+                else if (text !== note.text)
+                    await note.item.setSegments([{ type: "hashtag", text: CTX_TAG }, { type: "text", text: " " + text }]);
+            } else if (text) {
+                const rec = this.ui.getActivePanel()?.getActiveRecord();
+                let parentItem = this._allItems?.get(anchorGuid);
+                if (rec && !parentItem) {
+                    await this._refresh(); // line may be newer than the last read
+                    parentItem = this._allItems?.get(anchorGuid);
+                }
+                if (rec && parentItem) {
+                    await rec.createLineItem(parentItem, null, "text",
+                        [{ type: "hashtag", text: CTX_TAG }, { type: "text", text: " " + text }], null);
+                } else {
+                    this.ui.addToaster({ title: "Margin Notes", message: "Couldn't resolve the line", dismissible: true, autoDestroyTime: 3000 });
+                }
+            }
+        } catch (e) {
+            console.warn("[margin-notes] save failed", e);
+            this.ui.addToaster({ title: "Margin Notes", message: "Note save failed", dismissible: true, autoDestroyTime: 3000 });
+        }
+        this._refreshSoon(350); // lineitem event usually beats this; harmless either way
+    }
+
+}

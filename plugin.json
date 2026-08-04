@@ -1,0 +1,6 @@
+{
+  "ver": 1,
+  "name": "Margin Notes",
+  "icon": "notes",
+  "description": "Tufte-style margin notes: #ctx child lines rendered as sidenotes in the right margin, or popovers when the panel is narrow."
+}
