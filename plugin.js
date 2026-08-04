@@ -12,6 +12,7 @@ const CTX_TAG = "#ctx";
 const SIDENOTE_MIN_GUTTER = 190; // px of free margin needed to render sidenotes
 const NOTE_WIDTH_MAX = 260;
 const STYLE_ID = "margin-notes-style";
+const MUTE_STYLE_ID = "margin-notes-mute";
 const CSS = `
   .mn-root { position: fixed; inset: 0 auto auto 0; width: 0; height: 0; z-index: 480; pointer-events: none; }
   .mn-root > * { pointer-events: auto; }
@@ -58,6 +59,10 @@ export class Plugin extends AppPlugin {
         style.textContent = CSS;
         document.head.appendChild(style);
 
+        this._muteStyle = document.createElement("style");
+        this._muteStyle.id = MUTE_STYLE_ID;
+        document.head.appendChild(this._muteStyle);
+
         this._root = document.createElement("div");
         this._root.className = "mn-root";
         document.body.appendChild(this._root);
@@ -100,6 +105,7 @@ export class Plugin extends AppPlugin {
         document.removeEventListener("mousemove", this._onMove);
         this._root?.remove();
         document.getElementById(STYLE_ID)?.remove();
+        document.getElementById(MUTE_STYLE_ID)?.remove();
     }
 
     // ---- data ----
@@ -196,7 +202,12 @@ export class Plugin extends AppPlugin {
 
     _render() {
         this._clear();
-        if (!this._enabled) return;
+        if (!this._enabled) { this._muteStyle.textContent = ""; return; }
+        // Mute expanded #ctx lines in the tree: CSS-only (no DOM mutation), scoped to
+        // exact guids, so an annotation reads as marginalia even when its source shows.
+        this._muteStyle.textContent = [...this._noteGuids]
+            .map((g) => `.listitem[data-guid="${g}"] { opacity: .55; font-style: italic; }`)
+            .join("\n");
         for (const entry of this._model) {
             entry.notes.forEach((note, i) => {
                 const el = document.createElement("div");
@@ -215,6 +226,9 @@ export class Plugin extends AppPlugin {
         for (const r of this._rendered) {
             const anchor = this._anchorEl(r.anchorGuid);
             if (!anchor) { r.el.style.display = "none"; continue; }
+            // Mutual exclusion: if the #ctx line itself is rendered (parent expanded),
+            // the user is looking at the source — keep the margin quiet.
+            if (this._anchorEl(r.note.guid)) { r.el.style.display = "none"; continue; }
             const rect = anchor.getBoundingClientRect();
             if (rect.bottom < -40 || rect.top > innerHeight + 40) { r.el.style.display = "none"; continue; }
             const gutter = this._gutterFor(anchor);

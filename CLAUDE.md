@@ -72,6 +72,13 @@ Verified live on the web client, 0.0.18 / desktop v1.0.18 era (2026-08-03):
 - End-to-end verified over CDP: sidenote rendering + alignment, hover-`+` authoring,
   click-to-edit prefill, clear-to-delete. Popover (narrow) mode logic shipped but only
   exercised in a mockup, not live.
+- **Tree/margin mutual exclusion + muting** (verified live both directions): when a
+  `#ctx` line's own `.listitem` is in the DOM (parent expanded), its margin note hides
+  and the tree line is muted via guid-targeted CSS (`opacity:.55; font-style:italic`,
+  second injected style tag). Collapse removes the line from the DOM → the sidenote
+  returns within one 1200ms tick (collapse fires no lineitem event; the tick catches it).
+- Native collapse/expand does NOT respond to synthetic `.click()` on
+  `.line-fold-chevron` — needs a trusted event (CDP `Input.dispatchMouseEvent` works).
 - Deploy loop used: `./build.sh .` then
   `./bin/thymercli plugin update code "Margin Notes" --file dist/plugin.js -w <ws>`
   (and `plugin update config ... --file plugin.json`). The web client needs a reload to
