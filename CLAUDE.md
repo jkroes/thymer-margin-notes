@@ -90,6 +90,13 @@ Verified live on the web client, 0.0.18 / desktop v1.0.18 era (2026-08-03):
   — the editor's undo stack can't see SDK structural writes. Persisted data was fine
   (in-memory guard only; reload rebuilt cleanly). Clearing now empties the line's
   segments instead (`setSegments`, a content op), and empty notes aren't rendered.
+- **`children` arrays retain stale entries** (moves, trash) — a line can appear in two
+  parents' `children` while `parent_guid` names the real one. The walk filters kids by
+  `kid.parent_guid === item.guid`; without it a moved note renders under both its old
+  and new parent (seen live 2026-08-03).
+- **`getActiveRecord()` can be null when the window/panel is unfocused** — treat null
+  as "don't know", not "no document"; clearing on null wipes the overlay in background
+  windows.
 - Native collapse/expand does NOT respond to synthetic `.click()` on
   `.line-fold-chevron` — needs a trusted event (CDP `Input.dispatchMouseEvent` works).
 - Deploy loop used: `./build.sh .` then

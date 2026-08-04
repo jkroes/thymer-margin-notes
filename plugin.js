@@ -120,7 +120,9 @@ export class Plugin extends AppPlugin {
         if (!this._enabled) return;
         if (this._editing) { this._refreshSoon(1000); return; } // don't kill an open editor card
         const rec = this.ui.getActivePanel()?.getActiveRecord();
-        if (!rec) { this._clear(); return; }
+        // null can mean "window/panel not focused", not "no document" — don't clear;
+        // notes whose anchor rows leave the DOM hide themselves in _reposition.
+        if (!rec) return;
         const recGuid = rec.guid;
         let model = [];
         const items = new Map();
@@ -141,6 +143,9 @@ export class Plugin extends AppPlugin {
                     const kids = await this._childrenOf(item);
                     const notes = [];
                     for (const kid of kids || []) {
+                        // children arrays retain stale entries (moves, trash) — a kid
+                        // only belongs here if its parent_guid points back at this item.
+                        if (kid.parent_guid !== item.guid) continue;
                         const segs = kid.segments || [];
                         const first = segs[0];
                         if (first && first.type === "hashtag" && String(first.text).toLowerCase() === CTX_TAG) {
