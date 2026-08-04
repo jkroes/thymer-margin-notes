@@ -56,7 +56,11 @@ A note is a child line whose first segment is the hashtag `#ctx`; the rest of th
 the note text. The plugin renders these as sidenotes in the right margin (gutter ≥190px)
 or as ✻ glyph + popover when narrow. Hover a line → `+` in the margin → type → Enter/blur
 saves via `createLineItem`; clearing a note's text deletes the line. Toggle via the
-command palette ("Margin Notes: toggle", localStorage per device).
+status bar item (localStorage per device). The palette command "Margin Notes:
+toggle #ctx on current line" converts the caret line to/from contextual content —
+the caret line is found via Thymer's own row class `.listitem.listitem-with-caret`
+(read-only DOM; fills the SDK's missing `getFocusedLineItem()`). Top-level lines are
+refused (no parent line to annotate).
 
 Verified live on the web client, 0.0.18 / desktop v1.0.18 era (2026-08-03):
 

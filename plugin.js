@@ -67,15 +67,24 @@ export class Plugin extends AppPlugin {
         this._root.className = "mn-root";
         document.body.appendChild(this._root);
 
-        this.ui.addCommandPaletteCommand({
-            label: "Margin Notes: toggle",
+        // One palette command per plugin, so display on/off lives on the status bar
+        // and the palette slot goes to the per-line toggle.
+        this.ui.addStatusBarItem({
+            label: "Margin Notes",
             icon: "ti-notes",
-            onSelected: () => {
+            tooltip: "Toggle margin notes display",
+            onClick: () => {
                 this._enabled = !this._enabled;
                 localStorage.setItem("mn-enabled", this._enabled ? "1" : "0");
                 this._enabled ? this._refreshSoon(0) : this._clear();
                 this.ui.addToaster({ title: "Margin Notes", message: "Margin notes " + (this._enabled ? "on" : "off"), dismissible: true, autoDestroyTime: 2000 });
             },
+        });
+
+        this.ui.addCommandPaletteCommand({
+            label: "Margin Notes: toggle #ctx on current line",
+            icon: "ti-notes",
+            onSelected: () => this._toggleCaretLine(),
         });
 
         for (const ev of ["panel.navigated", "panel.focused"])
@@ -166,6 +175,43 @@ export class Plugin extends AppPlugin {
         this._allItems = allItems;
         this._noteGuids = noteGuids;
         this._render();
+    }
+
+    // Toggle the #ctx marker on the line that has the caret. The caret line is
+    // identified by Thymer's own row class .listitem-with-caret (read-only DOM).
+    async _toggleCaretLine() {
+        const toast = (message) => this.ui.addToaster({ title: "Margin Notes", message, dismissible: true, autoDestroyTime: 2500 });
+        const guid = document.querySelector(".listitem.listitem-with-caret")?.getAttribute("data-guid");
+        if (!guid) { toast("Put the cursor on a line first"); return; }
+        let item = this._allItems?.get(guid);
+        if (!item) { await this._refresh(); item = this._allItems?.get(guid); }
+        if (!item) { toast("Couldn't resolve the line"); return; }
+        const rec = this.ui.getActivePanel()?.getActiveRecord();
+        const segs = (item.segments || []).map((s) => ({ type: s.type, text: s.text }));
+        const first = segs[0];
+        const isCtx = first && first.type === "hashtag" && String(first.text).toLowerCase() === CTX_TAG;
+        try {
+            if (isCtx) {
+                const rest = segs.slice(1);
+                if (rest[0] && rest[0].type === "text" && typeof rest[0].text === "string")
+                    rest[0].text = rest[0].text.replace(/^\s+/, "");
+                await item.setSegments(rest.length ? rest : [{ type: "text", text: "" }]);
+                toast("Line is normal content again");
+            } else {
+                if (rec && item.parent_guid === rec.guid) { toast("Top-level lines have no parent line to annotate"); return; }
+                if (first && first.type === "text" && typeof first.text === "string") {
+                    segs[0] = { type: "text", text: " " + first.text.replace(/^\s+/, "") };
+                    await item.setSegments([{ type: "hashtag", text: CTX_TAG }, ...segs]);
+                } else {
+                    await item.setSegments([{ type: "hashtag", text: CTX_TAG }, { type: "text", text: " " }, ...segs]);
+                }
+                toast("Line is now contextual content of its parent");
+            }
+        } catch (e) {
+            console.warn("[margin-notes] toggle failed", e);
+            toast("Toggle failed");
+        }
+        this._refreshSoon(350);
     }
 
     async _childrenOf(item) {
