@@ -15,6 +15,15 @@ purely a different way of showing it:
   expanded), the margin stays quiet and the line renders dimmed + italic instead — you
   never see a note twice. Collapse the parent and the sidenote comes back.
 
+![Sidenotes in the right margin](docs/sidenotes.png)
+
+*Wide panel: notes render as sidenotes aligned to their line.*
+
+![Glyph and popover at narrow width](docs/popover.png)
+
+*Narrow panel: one ✻ glyph per annotated line; clicking it stacks the line's notes in
+a popover.*
+
 ## Usage
 
 | Action | How |

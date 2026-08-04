@@ -337,6 +337,10 @@ export class Plugin extends AppPlugin {
             pop.style.top = rect.bottom + 4 + "px";
             pop.addEventListener("click", (e) => e.stopPropagation());
             this._root.appendChild(pop);
+            // clamp into the viewport once its height is known; flip above if needed
+            const ph = pop.offsetHeight;
+            if (rect.bottom + 4 + ph > innerHeight - 8)
+                pop.style.top = Math.max(8, rect.top - ph - 4) + "px";
             this._pop = pop;
             this._outside = (e) => { if (!pop.contains(e.target)) this._closePop(); };
             setTimeout(() => document.addEventListener("click", this._outside), 0);
