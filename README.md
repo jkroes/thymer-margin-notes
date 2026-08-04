@@ -1,6 +1,7 @@
 # Margin Notes
 
-Tufte-style contextual content for [Thymer](https://thymer.com): attach a note to any
+[Tufte-style](https://rstudio.github.io/tufte/) contextual content for
+[Thymer](https://thymer.com): attach a note to any
 line and read it in the right margin, not in the outline.
 
 A note is a real child line whose first segment is the `#ctx` hashtag — plain Thymer
