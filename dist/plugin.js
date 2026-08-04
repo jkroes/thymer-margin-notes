@@ -62,8 +62,10 @@ var plugins = (() => {
     }
     onLoad() {
       this._enabled = localStorage.getItem("mn-enabled") !== "0";
-      this._model = [];
-      this._items = /* @__PURE__ */ new Map();
+      this._panes = [];
+      this._models = /* @__PURE__ */ new Map();
+      this._allItems = /* @__PURE__ */ new Map();
+      this._recGuids = /* @__PURE__ */ new Set();
       this._noteGuids = /* @__PURE__ */ new Set();
       this._rendered = [];
       this._editing = null;
@@ -101,7 +103,7 @@ var plugins = (() => {
         icon: "ti-notes",
         onSelected: /* @__PURE__ */ __name(() => this._toggleCaretLine(), "onSelected")
       });
-      for (const ev of ["panel.navigated", "panel.focused"])
+      for (const ev of ["panel.navigated", "panel.focused", "panel.closed"])
         this._handlers.push(this.events.on(ev, () => this._refreshSoon(150)));
       for (const ev of ["lineitem.created", "lineitem.updated", "lineitem.moved", "lineitem.deleted", "lineitem.undeleted"])
         this._handlers.push(this.events.on(ev, () => this._refreshSoon(300)));
@@ -126,60 +128,104 @@ var plugins = (() => {
       clearTimeout(this._refreshTimer);
       this._refreshTimer = setTimeout(() => this._refresh(), ms);
     }
+    // Every editor pane showing a record, each with its DOM element for scoped anchor
+    // lookups. Falls back to the single active panel when getPanels() is missing, and
+    // to document-wide queries when getElement() is — the pre-multi-pane behavior.
+    _editorPanes() {
+      let panels = null;
+      try {
+        panels = typeof this.ui.getPanels === "function" ? this.ui.getPanels() : null;
+      } catch {
+      }
+      if (!Array.isArray(panels) || !panels.length) {
+        const p = this.ui.getActivePanel?.();
+        panels = p ? [p] : [];
+      }
+      const panes = [];
+      for (const p of panels) {
+        let rec = null, el = null, active = false;
+        try {
+          rec = p.getActiveRecord?.() || null;
+        } catch {
+        }
+        if (!rec) continue;
+        try {
+          el = p.getElement?.() || null;
+        } catch {
+        }
+        try {
+          active = !!p.isActive?.();
+        } catch {
+        }
+        panes.push({ rec, recGuid: rec.guid, el, active });
+      }
+      if (panes.length > 1 && panes.some((p) => !p.el))
+        return panes.filter((p) => p.el || p.active);
+      return panes;
+    }
+    _paneKey(panes) {
+      return panes.map((p) => p.recGuid).sort().join(",");
+    }
     async _refresh() {
       if (!this._enabled) return;
       if (this._editing) {
         this._refreshSoon(1e3);
         return;
       }
-      const rec = this.ui.getActivePanel()?.getActiveRecord();
-      if (!rec) return;
-      const recGuid = rec.guid;
-      let model = [];
-      const items = /* @__PURE__ */ new Map();
+      const panes = this._editorPanes();
+      if (!panes.length) return;
+      const key = this._paneKey(panes);
+      const models = /* @__PURE__ */ new Map();
       const allItems = /* @__PURE__ */ new Map();
       const noteGuids = /* @__PURE__ */ new Set();
       try {
-        const top = await rec.getLineItems();
-        const visited = /* @__PURE__ */ new Set();
-        const walk = /* @__PURE__ */ __name(async (list) => {
-          for (const item of list || []) {
-            if (!item || visited.has(item.guid)) continue;
-            visited.add(item.guid);
-            allItems.set(item.guid, item);
-            const kids = await this._childrenOf(item);
-            const notes = [];
-            for (const kid of kids || []) {
-              if (kid.parent_guid !== item.guid) continue;
-              const segs = kid.segments || [];
-              const first = segs[0];
-              if (first && first.type === "hashtag" && String(first.text).toLowerCase() === CTX_TAG) {
-                noteGuids.add(kid.guid);
-                const text = this._segText(segs.slice(1));
-                if (text) notes.push({ guid: kid.guid, item: kid, text });
-              }
-            }
-            if (notes.length) {
-              items.set(item.guid, item);
-              model.push({ anchorGuid: item.guid, notes });
-            }
-            await walk(kids);
-          }
-        }, "walk");
-        await walk(top);
+        for (const pane of panes) {
+          if (models.has(pane.recGuid)) continue;
+          models.set(pane.recGuid, await this._walkRecord(pane.rec, allItems, noteGuids));
+        }
       } catch (e) {
         console.warn("[margin-notes] read failed", e);
         return;
       }
-      if (this.ui.getActivePanel()?.getActiveRecord()?.guid !== recGuid) return;
-      this._model = model;
-      this._items = items;
+      if (this._paneKey(this._editorPanes()) !== key) return;
+      this._panes = panes;
+      this._models = models;
       this._allItems = allItems;
+      this._recGuids = new Set(panes.map((p) => p.recGuid));
       this._noteGuids = noteGuids;
       this._render();
     }
+    async _walkRecord(rec, allItems, noteGuids) {
+      const model = [];
+      const top = await rec.getLineItems();
+      const visited = /* @__PURE__ */ new Set();
+      const walk = /* @__PURE__ */ __name(async (list) => {
+        for (const item of list || []) {
+          if (!item || visited.has(item.guid)) continue;
+          visited.add(item.guid);
+          allItems.set(item.guid, item);
+          const kids = await this._childrenOf(item);
+          const notes = [];
+          for (const kid of kids || []) {
+            if (kid.parent_guid !== item.guid) continue;
+            const segs = kid.segments || [];
+            const first = segs[0];
+            if (first && first.type === "hashtag" && String(first.text).toLowerCase() === CTX_TAG) {
+              noteGuids.add(kid.guid);
+              const text = this._segText(segs.slice(1));
+              if (text) notes.push({ guid: kid.guid, item: kid, text });
+            }
+          }
+          if (notes.length) model.push({ anchorGuid: item.guid, notes });
+          await walk(kids);
+        }
+      }, "walk");
+      await walk(top);
+      return model;
+    }
     // Toggle the #ctx marker on the line that has the caret. The caret line is
-    // identified by Thymer's own row class .listitem-with-caret (read-only DOM).
+    // identified by Thymer's own row class .listitem-with-caret (read-only DOM);
+    // only the focused pane has a caret, so a document-wide query is unambiguous.
     async _toggleCaretLine() {
       const toast = /* @__PURE__ */ __name((message) => this.ui.addToaster({ title: "Margin Notes", message, dismissible: true, autoDestroyTime: 2500 }), "toast");
       const guid = document.querySelector(".listitem.listitem-with-caret")?.getAttribute("data-guid");
@@ -196,7 +242,6 @@ var plugins = (() => {
         toast("Couldn't resolve the line");
         return;
       }
-      const rec = this.ui.getActivePanel()?.getActiveRecord();
       const segs = (item.segments || []).map((s) => ({ type: s.type, text: s.text }));
       const first = segs[0];
       const isCtx = first && first.type === "hashtag" && String(first.text).toLowerCase() === CTX_TAG;
@@ -208,7 +253,7 @@ var plugins = (() => {
           await item.setSegments(rest.length ? rest : [{ type: "text", text: "" }]);
           toast("Line is normal content again");
         } else {
-          if (rec && item.parent_guid === rec.guid) {
+          if (this._recGuids.has(item.parent_guid)) {
             toast("Top-level lines have no parent line to annotate");
             return;
           }
@@ -244,8 +289,8 @@ var plugins = (() => {
       this._root.replaceChildren();
       this._rendered = [];
     }
-    _anchorEl(guid) {
-      return document.querySelector(`.listitem[data-guid="${guid}"]`);
+    _anchorEl(guid, scope) {
+      return (scope || document).querySelector(`.listitem[data-guid="${guid}"]`);
     }
     _gutterFor(el) {
       const scroller = el.closest(".panel-scroller-y");
@@ -259,30 +304,33 @@ var plugins = (() => {
         return;
       }
       this._muteStyle.textContent = [...this._noteGuids].map((g) => `.listitem[data-guid="${g}"] { opacity: .55; font-style: italic; }`).join("\n");
-      for (const entry of this._model) {
-        entry.notes.forEach((note, i) => {
-          const el = document.createElement("div");
-          el.dataset.anchor = entry.anchorGuid;
-          el.addEventListener("click", (e) => {
-            e.stopPropagation();
-            this._onNoteClick(entry, note, el);
+      for (const pane of this._panes) {
+        const model = this._models.get(pane.recGuid) || [];
+        for (const entry of model) {
+          entry.notes.forEach((note, i) => {
+            const el = document.createElement("div");
+            el.dataset.anchor = entry.anchorGuid;
+            el.addEventListener("click", (e) => {
+              e.stopPropagation();
+              this._onNoteClick(entry, note, el, pane.el);
+            });
+            this._root.appendChild(el);
+            this._rendered.push({ el, paneEl: pane.el, anchorGuid: entry.anchorGuid, note, index: i });
           });
-          this._root.appendChild(el);
-          this._rendered.push({ el, anchorGuid: entry.anchorGuid, note, index: i });
-        });
+        }
       }
       this._reposition();
     }
     _reposition() {
       if (!this._rendered.length && !this._editing) return;
-      let lastBottom = -1e9;
+      const lastBottoms = /* @__PURE__ */ new Map();
       for (const r of this._rendered) {
-        const anchor = this._anchorEl(r.anchorGuid);
+        const anchor = this._anchorEl(r.anchorGuid, r.paneEl);
         if (!anchor) {
           r.el.style.display = "none";
           continue;
         }
-        if (this._anchorEl(r.note.guid)) {
+        if (this._anchorEl(r.note.guid, r.paneEl)) {
           r.el.style.display = "none";
           continue;
         }
@@ -300,9 +348,10 @@ var plugins = (() => {
           r.el.style.width = Math.min(gutter - 30, NOTE_WIDTH_MAX) + "px";
           r.el.style.left = rect.right + 14 + "px";
           let top = rect.top + r.index * 18;
+          const lastBottom = lastBottoms.get(r.paneEl) ?? -1e9;
           if (top < lastBottom + 8) top = lastBottom + 8;
           r.el.style.top = top + "px";
-          lastBottom = top + r.el.offsetHeight;
+          lastBottoms.set(r.paneEl, top + r.el.offsetHeight);
         } else {
           if (r.index > 0) {
             r.el.style.display = "none";
@@ -317,16 +366,16 @@ var plugins = (() => {
       }
     }
     // ---- popover (narrow mode) ----
-    _onNoteClick(entry, note, el) {
+    _onNoteClick(entry, note, el, paneEl) {
       if (el.classList.contains("mn-note")) {
-        this._openEditor(entry.anchorGuid, note);
+        this._openEditor(entry.anchorGuid, note, paneEl);
       } else {
         if (this._pop?.dataset.anchor === entry.anchorGuid) {
           this._closePop();
           return;
         }
         this._closePop();
-        const anchor = this._anchorEl(entry.anchorGuid);
+        const anchor = this._anchorEl(entry.anchorGuid, paneEl);
         if (!anchor) return;
         const rect = anchor.getBoundingClientRect();
         const pop = document.createElement("div");
@@ -339,7 +388,7 @@ var plugins = (() => {
           row.addEventListener("click", (e) => {
             e.stopPropagation();
             this._closePop();
-            this._openEditor(entry.anchorGuid, n);
+            this._openEditor(entry.anchorGuid, n, paneEl);
           });
           pop.appendChild(row);
         }
@@ -364,10 +413,10 @@ var plugins = (() => {
       this._pop = null;
     }
     // ---- authoring ----
-    _openEditor(anchorGuid, note) {
+    _openEditor(anchorGuid, note, paneEl) {
       this._closeEditor();
       this._closePop();
-      const anchor = this._anchorEl(anchorGuid);
+      const anchor = this._anchorEl(anchorGuid, paneEl);
       if (!anchor) return;
       const rect = anchor.getBoundingClientRect();
       const gutter = this._gutterFor(anchor);

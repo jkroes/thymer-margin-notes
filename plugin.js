@@ -8,6 +8,10 @@
 // ("toggle #ctx on current line") or by typing a #ctx child directly. The editor DOM
 // is never mutated — the overlay is our own layer in document.body, positioned by
 // reading row geometry (.listitem[data-guid]).
+//
+// Multi-pane: every open editor panel gets its own notes. Each record is walked once,
+// then rendered per pane, with anchor lookups scoped to that pane's element — the same
+// guid can have a row in several panes at once.
 
 const CTX_TAG = "#ctx";
 const SIDENOTE_MIN_GUTTER = 190; // px of free margin needed to render sidenotes
@@ -45,10 +49,12 @@ const CSS = `
 export class Plugin extends AppPlugin {
     onLoad() {
         this._enabled = localStorage.getItem("mn-enabled") !== "0";
-        this._model = [];            // [{anchorGuid, notes: [{guid, text, item}]}]
-        this._items = new Map();     // lineGuid -> PluginLineItem (anchors)
+        this._panes = [];            // [{rec, recGuid, el}] — el is the panel's DOM element (or null → document)
+        this._models = new Map();    // recGuid -> [{anchorGuid, notes: [{guid, text, item}]}]
+        this._allItems = new Map();  // lineGuid -> PluginLineItem, merged across all panes' records
+        this._recGuids = new Set();  // record guids currently shown in some pane
         this._noteGuids = new Set(); // guids of #ctx lines themselves
-        this._rendered = [];         // [{el, anchorGuid, kind, index}]
+        this._rendered = [];         // [{el, paneEl, anchorGuid, note, index}]
         this._editing = null;        // open editor card, if any
         this._pop = null;            // open popover, if any
         this._handlers = [];
@@ -96,7 +102,7 @@ export class Plugin extends AppPlugin {
             onSelected: () => this._toggleCaretLine(),
         });
 
-        for (const ev of ["panel.navigated", "panel.focused"])
+        for (const ev of ["panel.navigated", "panel.focused", "panel.closed"])
             this._handlers.push(this.events.on(ev, () => this._refreshSoon(150)));
         for (const ev of ["lineitem.created", "lineitem.updated", "lineitem.moved", "lineitem.deleted", "lineitem.undeleted"])
             this._handlers.push(this.events.on(ev, () => this._refreshSoon(300)));
@@ -129,67 +135,104 @@ export class Plugin extends AppPlugin {
         this._refreshTimer = setTimeout(() => this._refresh(), ms);
     }
 
+    // Every editor pane showing a record, each with its DOM element for scoped anchor
+    // lookups. Falls back to the single active panel when getPanels() is missing, and
+    // to document-wide queries when getElement() is — the pre-multi-pane behavior.
+    _editorPanes() {
+        let panels = null;
+        try { panels = typeof this.ui.getPanels === "function" ? this.ui.getPanels() : null; } catch {}
+        if (!Array.isArray(panels) || !panels.length) {
+            const p = this.ui.getActivePanel?.();
+            panels = p ? [p] : [];
+        }
+        const panes = [];
+        for (const p of panels) {
+            let rec = null, el = null, active = false;
+            try { rec = p.getActiveRecord?.() || null; } catch {}
+            if (!rec) continue;
+            try { el = p.getElement?.() || null; } catch {}
+            try { active = !!p.isActive?.(); } catch {}
+            panes.push({ rec, recGuid: rec.guid, el, active });
+        }
+        // Without per-panel elements we can't disambiguate duplicate guids across panes:
+        // keep only the active pane (or the sole pane) rather than mis-anchor.
+        if (panes.length > 1 && panes.some((p) => !p.el))
+            return panes.filter((p) => p.el || p.active);
+        return panes;
+    }
+
+    _paneKey(panes) {
+        return panes.map((p) => p.recGuid).sort().join(",");
+    }
+
     async _refresh() {
         if (!this._enabled) return;
         if (this._editing) { this._refreshSoon(1000); return; } // don't kill an open editor card
-        const rec = this.ui.getActivePanel()?.getActiveRecord();
-        // null can mean "window/panel not focused", not "no document" — don't clear;
+        const panes = this._editorPanes();
+        // Empty can mean "window/panel not focused", not "no document" — don't clear;
         // notes whose anchor rows leave the DOM hide themselves in _reposition.
-        if (!rec) return;
-        const recGuid = rec.guid;
-        let model = [];
-        const items = new Map();
+        if (!panes.length) return;
+        const key = this._paneKey(panes);
+        const models = new Map();
         const allItems = new Map();
         const noteGuids = new Set();
         try {
-            // Live client (0.0.18): getLineItems returns a FLAT list of all items, and
-            // `children` is a prototype getter returning child item objects; the
-            // getChildren() documented in types.d.ts does not exist yet. Walk with a
-            // visited-set so flat list + recursion can't double-count.
-            const top = await rec.getLineItems();
-            const visited = new Set();
-            const walk = async (list) => {
-                for (const item of list || []) {
-                    if (!item || visited.has(item.guid)) continue;
-                    visited.add(item.guid);
-                    allItems.set(item.guid, item);
-                    const kids = await this._childrenOf(item);
-                    const notes = [];
-                    for (const kid of kids || []) {
-                        // children arrays retain stale entries (moves, trash) — a kid
-                        // only belongs here if its parent_guid points back at this item.
-                        if (kid.parent_guid !== item.guid) continue;
-                        const segs = kid.segments || [];
-                        const first = segs[0];
-                        if (first && first.type === "hashtag" && String(first.text).toLowerCase() === CTX_TAG) {
-                            noteGuids.add(kid.guid);
-                            const text = this._segText(segs.slice(1));
-                            if (text) notes.push({ guid: kid.guid, item: kid, text });
-                        }
-                    }
-                    if (notes.length) {
-                        items.set(item.guid, item);
-                        model.push({ anchorGuid: item.guid, notes });
-                    }
-                    await walk(kids);
-                }
-            };
-            await walk(top);
+            for (const pane of panes) {
+                if (models.has(pane.recGuid)) continue; // same record open in two panes
+                models.set(pane.recGuid, await this._walkRecord(pane.rec, allItems, noteGuids));
+            }
         } catch (e) {
             console.warn("[margin-notes] read failed", e);
             return;
         }
-        // Stale-response guard: panel may have navigated while we were reading.
-        if (this.ui.getActivePanel()?.getActiveRecord()?.guid !== recGuid) return;
-        this._model = model;
-        this._items = items;
+        // Stale-response guard: panes may have navigated/closed while we were reading.
+        if (this._paneKey(this._editorPanes()) !== key) return;
+        this._panes = panes;
+        this._models = models;
         this._allItems = allItems;
+        this._recGuids = new Set(panes.map((p) => p.recGuid));
         this._noteGuids = noteGuids;
         this._render();
     }
 
+    async _walkRecord(rec, allItems, noteGuids) {
+        const model = [];
+        // Live client (0.0.18): getLineItems returns a FLAT list of all items, and
+        // `children` is a prototype getter returning child item objects; the
+        // getChildren() documented in types.d.ts does not exist yet. Walk with a
+        // visited-set so flat list + recursion can't double-count.
+        const top = await rec.getLineItems();
+        const visited = new Set();
+        const walk = async (list) => {
+            for (const item of list || []) {
+                if (!item || visited.has(item.guid)) continue;
+                visited.add(item.guid);
+                allItems.set(item.guid, item);
+                const kids = await this._childrenOf(item);
+                const notes = [];
+                for (const kid of kids || []) {
+                    // children arrays retain stale entries (moves, trash) — a kid
+                    // only belongs here if its parent_guid points back at this item.
+                    if (kid.parent_guid !== item.guid) continue;
+                    const segs = kid.segments || [];
+                    const first = segs[0];
+                    if (first && first.type === "hashtag" && String(first.text).toLowerCase() === CTX_TAG) {
+                        noteGuids.add(kid.guid);
+                        const text = this._segText(segs.slice(1));
+                        if (text) notes.push({ guid: kid.guid, item: kid, text });
+                    }
+                }
+                if (notes.length) model.push({ anchorGuid: item.guid, notes });
+                await walk(kids);
+            }
+        };
+        await walk(top);
+        return model;
+    }
+
     // Toggle the #ctx marker on the line that has the caret. The caret line is
-    // identified by Thymer's own row class .listitem-with-caret (read-only DOM).
+    // identified by Thymer's own row class .listitem-with-caret (read-only DOM);
+    // only the focused pane has a caret, so a document-wide query is unambiguous.
     async _toggleCaretLine() {
         const toast = (message) => this.ui.addToaster({ title: "Margin Notes", message, dismissible: true, autoDestroyTime: 2500 });
         const guid = document.querySelector(".listitem.listitem-with-caret")?.getAttribute("data-guid");
@@ -197,7 +240,6 @@ export class Plugin extends AppPlugin {
         let item = this._allItems?.get(guid);
         if (!item) { await this._refresh(); item = this._allItems?.get(guid); }
         if (!item) { toast("Couldn't resolve the line"); return; }
-        const rec = this.ui.getActivePanel()?.getActiveRecord();
         const segs = (item.segments || []).map((s) => ({ type: s.type, text: s.text }));
         const first = segs[0];
         const isCtx = first && first.type === "hashtag" && String(first.text).toLowerCase() === CTX_TAG;
@@ -209,7 +251,7 @@ export class Plugin extends AppPlugin {
                 await item.setSegments(rest.length ? rest : [{ type: "text", text: "" }]);
                 toast("Line is normal content again");
             } else {
-                if (rec && item.parent_guid === rec.guid) { toast("Top-level lines have no parent line to annotate"); return; }
+                if (this._recGuids.has(item.parent_guid)) { toast("Top-level lines have no parent line to annotate"); return; }
                 if (first && first.type === "text" && typeof first.text === "string") {
                     segs[0] = { type: "text", text: " " + first.text.replace(/^\s+/, "") };
                     await item.setSegments([{ type: "hashtag", text: CTX_TAG }, ...segs]);
@@ -247,8 +289,8 @@ export class Plugin extends AppPlugin {
         this._rendered = [];
     }
 
-    _anchorEl(guid) {
-        return document.querySelector(`.listitem[data-guid="${guid}"]`);
+    _anchorEl(guid, scope) {
+        return (scope || document).querySelector(`.listitem[data-guid="${guid}"]`);
     }
 
     _gutterFor(el) {
@@ -262,30 +304,35 @@ export class Plugin extends AppPlugin {
         if (!this._enabled) { this._muteStyle.textContent = ""; return; }
         // Mute expanded #ctx lines in the tree: CSS-only (no DOM mutation), scoped to
         // exact guids, so an annotation reads as marginalia even when its source shows.
+        // Guid-keyed CSS is intentionally global — the muting applies in every pane.
         this._muteStyle.textContent = [...this._noteGuids]
             .map((g) => `.listitem[data-guid="${g}"] { opacity: .55; font-style: italic; }`)
             .join("\n");
-        for (const entry of this._model) {
-            entry.notes.forEach((note, i) => {
-                const el = document.createElement("div");
-                el.dataset.anchor = entry.anchorGuid;
-                el.addEventListener("click", (e) => { e.stopPropagation(); this._onNoteClick(entry, note, el); });
-                this._root.appendChild(el);
-                this._rendered.push({ el, anchorGuid: entry.anchorGuid, note, index: i });
-            });
+        for (const pane of this._panes) {
+            const model = this._models.get(pane.recGuid) || [];
+            for (const entry of model) {
+                entry.notes.forEach((note, i) => {
+                    const el = document.createElement("div");
+                    el.dataset.anchor = entry.anchorGuid;
+                    el.addEventListener("click", (e) => { e.stopPropagation(); this._onNoteClick(entry, note, el, pane.el); });
+                    this._root.appendChild(el);
+                    this._rendered.push({ el, paneEl: pane.el, anchorGuid: entry.anchorGuid, note, index: i });
+                });
+            }
         }
         this._reposition();
     }
 
     _reposition() {
         if (!this._rendered.length && !this._editing) return;
-        let lastBottom = -1e9;
+        const lastBottoms = new Map(); // paneEl -> bottom of last placed sidenote in that pane
         for (const r of this._rendered) {
-            const anchor = this._anchorEl(r.anchorGuid);
+            const anchor = this._anchorEl(r.anchorGuid, r.paneEl);
             if (!anchor) { r.el.style.display = "none"; continue; }
-            // Mutual exclusion: if the #ctx line itself is rendered (parent expanded),
-            // the user is looking at the source — keep the margin quiet.
-            if (this._anchorEl(r.note.guid)) { r.el.style.display = "none"; continue; }
+            // Mutual exclusion per pane: if the #ctx line itself is rendered in THIS
+            // pane (parent expanded), the user is looking at the source there — keep
+            // that pane's margin quiet; other panes still show the note.
+            if (this._anchorEl(r.note.guid, r.paneEl)) { r.el.style.display = "none"; continue; }
             const rect = anchor.getBoundingClientRect();
             if (rect.bottom < -40 || rect.top > innerHeight + 40) { r.el.style.display = "none"; continue; }
             const gutter = this._gutterFor(anchor);
@@ -297,9 +344,10 @@ export class Plugin extends AppPlugin {
                 r.el.style.width = Math.min(gutter - 30, NOTE_WIDTH_MAX) + "px";
                 r.el.style.left = rect.right + 14 + "px";
                 let top = rect.top + r.index * 18;
+                const lastBottom = lastBottoms.get(r.paneEl) ?? -1e9;
                 if (top < lastBottom + 8) top = lastBottom + 8;
                 r.el.style.top = top + "px";
-                lastBottom = top + r.el.offsetHeight;
+                lastBottoms.set(r.paneEl, top + r.el.offsetHeight);
             } else {
                 // One glyph per line regardless of note count; the popover stacks them.
                 if (r.index > 0) { r.el.style.display = "none"; continue; }
@@ -314,13 +362,13 @@ export class Plugin extends AppPlugin {
 
     // ---- popover (narrow mode) ----
 
-    _onNoteClick(entry, note, el) {
+    _onNoteClick(entry, note, el, paneEl) {
         if (el.classList.contains("mn-note")) {
-            this._openEditor(entry.anchorGuid, note);
+            this._openEditor(entry.anchorGuid, note, paneEl);
         } else {
             if (this._pop?.dataset.anchor === entry.anchorGuid) { this._closePop(); return; }
             this._closePop();
-            const anchor = this._anchorEl(entry.anchorGuid);
+            const anchor = this._anchorEl(entry.anchorGuid, paneEl);
             if (!anchor) return;
             const rect = anchor.getBoundingClientRect();
             const pop = document.createElement("div");
@@ -330,7 +378,7 @@ export class Plugin extends AppPlugin {
                 const row = document.createElement("div");
                 row.className = "mn-pop-row";
                 row.textContent = n.text;
-                row.addEventListener("click", (e) => { e.stopPropagation(); this._closePop(); this._openEditor(entry.anchorGuid, n); });
+                row.addEventListener("click", (e) => { e.stopPropagation(); this._closePop(); this._openEditor(entry.anchorGuid, n, paneEl); });
                 pop.appendChild(row);
             }
             pop.style.left = Math.min(rect.left + 150, innerWidth - 300) + "px";
@@ -356,10 +404,10 @@ export class Plugin extends AppPlugin {
 
     // ---- authoring ----
 
-    _openEditor(anchorGuid, note) {
+    _openEditor(anchorGuid, note, paneEl) {
         this._closeEditor();
         this._closePop();
-        const anchor = this._anchorEl(anchorGuid);
+        const anchor = this._anchorEl(anchorGuid, paneEl);
         if (!anchor) return;
         const rect = anchor.getBoundingClientRect();
         const gutter = this._gutterFor(anchor);
