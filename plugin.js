@@ -115,12 +115,19 @@ export class Plugin extends AppPlugin {
         // Catch re-renders, collapses, and virtualization the events don't cover.
         this._tick = setInterval(() => this._reposition(), 1200);
 
+        // Panel-level overlays (Link-to-Line, etc.) mount/unmount as direct panel
+        // children with no event and no scroll — reposition immediately so the
+        // occlusion check runs without waiting for the tick. Observed panels are
+        // (re)registered in _render(); observing is read-only.
+        this._panelObs = new MutationObserver(() => this._reposition());
+
         this._refreshSoon(400);
     }
 
     onUnload() {
         for (const h of this._handlers) this.events.off(h);
         clearInterval(this._tick);
+        this._panelObs?.disconnect();
         document.removeEventListener("scroll", this._onScroll, { capture: true });
         window.removeEventListener("resize", this._onResize);
         this._root?.remove();
@@ -319,6 +326,13 @@ export class Plugin extends AppPlugin {
                     this._rendered.push({ el, paneEl: pane.el, anchorGuid: entry.anchorGuid, note, index: i });
                 });
             }
+        }
+        // Re-register the overlay observer on the current set of panel elements
+        // (childList only — panel direct children are stable except for overlays,
+        // so this stays quiet during normal typing).
+        if (this._panelObs) {
+            this._panelObs.disconnect();
+            for (const pane of this._panes) if (pane.el) this._panelObs.observe(pane.el, { childList: true });
         }
         this._reposition();
     }

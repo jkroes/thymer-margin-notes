@@ -112,11 +112,13 @@ var plugins = (() => {
       document.addEventListener("scroll", this._onScroll, { capture: true, passive: true });
       window.addEventListener("resize", this._onResize);
       this._tick = setInterval(() => this._reposition(), 1200);
+      this._panelObs = new MutationObserver(() => this._reposition());
       this._refreshSoon(400);
     }
     onUnload() {
       for (const h of this._handlers) this.events.off(h);
       clearInterval(this._tick);
+      this._panelObs?.disconnect();
       document.removeEventListener("scroll", this._onScroll, { capture: true });
       window.removeEventListener("resize", this._onResize);
       this._root?.remove();
@@ -318,6 +320,10 @@ var plugins = (() => {
             this._rendered.push({ el, paneEl: pane.el, anchorGuid: entry.anchorGuid, note, index: i });
           });
         }
+      }
+      if (this._panelObs) {
+        this._panelObs.disconnect();
+        for (const pane of this._panes) if (pane.el) this._panelObs.observe(pane.el, { childList: true });
       }
       this._reposition();
     }
