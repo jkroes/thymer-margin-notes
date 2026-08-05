@@ -101,8 +101,11 @@ Verified live on the web client, 0.0.18 / desktop v1.0.18 era (2026-08-03):
   windows.
 - **Multi-pane (verified live 2026-08-04, web client):** the model is built per pane via
   `ui.getPanels()` → `getActiveRecord()`, and every anchor lookup is scoped to that
-  pane's `getElement()` subtree — both exist on the live client and `getElement()`
-  returns the panel node. The same record split into two panes renders the note once
+  pane's `getElement()` subtree — both exist on the live client. **`getElement()`
+  returns an inner editor node, NOT the `.panel.panel-normal` wrapper** (verified live
+  2026-08-05): fine for scoped anchor lookups, but anything that must see panel-level
+  overlays (e.g. the occlusion MutationObserver) walks up with `.closest(".panel")`
+  first. The same record split into two panes renders the note once
   per pane, each glyph at its own pane's row edge; navigating one pane away drops just
   that pane's notes (`panel.closed` is also subscribed now). Tree/margin mutual
   exclusion is per pane. Fallbacks: no `getPanels` → single active panel; no panel
