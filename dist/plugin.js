@@ -339,6 +339,10 @@ var plugins = (() => {
           r.el.style.display = "none";
           continue;
         }
+        if (this._anchorCovered(anchor, rect)) {
+          r.el.style.display = "none";
+          continue;
+        }
         const gutter = this._gutterFor(anchor);
         const side = gutter >= SIDENOTE_MIN_GUTTER;
         r.el.style.display = "";
@@ -364,6 +368,21 @@ var plugins = (() => {
           r.el.style.top = rect.top + (rect.height - 16) / 2 + "px";
         }
       }
+    }
+    // Occlusion: hide a note when its anchor row is visually covered by another
+    // layer — a full-panel plugin overlay, a native modal, a sticky header. The
+    // topmost element at the row's center tells us: anything inside the row's own
+    // scroller is just the editor painting itself (selection layers etc.); anything
+    // outside it is a cover. Read-only (elementFromPoint), no DOM mutation.
+    _anchorCovered(anchor, rect) {
+      const cy = rect.top + rect.height / 2;
+      if (cy < 0 || cy >= innerHeight) return false;
+      const cx = Math.min(Math.max(rect.left + rect.width / 2, 0), innerWidth - 1);
+      const el = document.elementFromPoint(cx, cy);
+      if (!el || anchor.contains(el)) return false;
+      if (this._root.contains(el)) return false;
+      const scroller = anchor.closest(".panel-scroller-y");
+      return scroller ? !scroller.contains(el) : false;
     }
     // ---- popover (narrow mode) ----
     _onNoteClick(entry, note, el, paneEl) {
