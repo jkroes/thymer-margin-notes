@@ -323,7 +323,10 @@ var plugins = (() => {
       }
       if (this._panelObs) {
         this._panelObs.disconnect();
-        for (const pane of this._panes) if (pane.el) this._panelObs.observe(pane.el, { childList: true });
+        for (const pane of this._panes) {
+          const host = pane.el && (pane.el.closest(".panel") || pane.el);
+          if (host) this._panelObs.observe(host, { childList: true });
+        }
       }
       this._reposition();
     }
