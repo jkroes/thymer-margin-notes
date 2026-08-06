@@ -58,8 +58,11 @@ or as ✻ glyph + popover when narrow. Notes are edited by clicking them (cleari
 text deletes the line); lines become notes via the palette command or by typing a
 `#ctx` child. The hover-`+` margin authoring shipped briefly and was removed
 2026-08-03: it only handled the no-note case, appeared on every line, and was
-confusable with the ✻ glyph at narrow widths. Toggle via the
-status bar item (localStorage per device). The palette command "Margin Notes:
+confusable with the ✻ glyph at narrow widths. Display on/off toggles via the
+status bar item or the palette command "Margin Notes: toggle display" (same
+`_toggleDisplay()`, localStorage per device; a plugin can register multiple
+palette commands — an earlier one-per-plugin assumption was wrong, community
+plugins register up to 15). The palette command "Margin Notes:
 toggle #ctx on current line" converts the caret line to/from contextual content —
 the caret line is found via Thymer's own row class `.listitem.listitem-with-caret`
 (read-only DOM; fills the SDK's missing `getFocusedLineItem()`). Top-level lines are

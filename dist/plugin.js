@@ -91,17 +91,17 @@ var plugins = (() => {
         label: "Margin Notes",
         icon: "ti-notes",
         tooltip: "Toggle margin notes display",
-        onClick: /* @__PURE__ */ __name(() => {
-          this._enabled = !this._enabled;
-          localStorage.setItem("mn-enabled", this._enabled ? "1" : "0");
-          this._enabled ? this._refreshSoon(0) : this._clear();
-          this.ui.addToaster({ title: "Margin Notes", message: "Margin notes " + (this._enabled ? "on" : "off"), dismissible: true, autoDestroyTime: 2e3 });
-        }, "onClick")
+        onClick: /* @__PURE__ */ __name(() => this._toggleDisplay(), "onClick")
       });
       this.ui.addCommandPaletteCommand({
         label: "Margin Notes: toggle #ctx on current line",
         icon: "ti-notes",
         onSelected: /* @__PURE__ */ __name(() => this._toggleCaretLine(), "onSelected")
+      });
+      this.ui.addCommandPaletteCommand({
+        label: "Margin Notes: toggle display",
+        icon: "ti-notes",
+        onSelected: /* @__PURE__ */ __name(() => this._toggleDisplay(), "onSelected")
       });
       for (const ev of ["panel.navigated", "panel.focused", "panel.closed"])
         this._handlers.push(this.events.on(ev, () => this._refreshSoon(150)));
@@ -224,6 +224,13 @@ var plugins = (() => {
       }, "walk");
       await walk(top);
       return model;
+    }
+    // Toggle whether margin notes render at all (per device, via localStorage).
+    _toggleDisplay() {
+      this._enabled = !this._enabled;
+      localStorage.setItem("mn-enabled", this._enabled ? "1" : "0");
+      this._enabled ? this._refreshSoon(0) : this._clear();
+      this.ui.addToaster({ title: "Margin Notes", message: "Margin notes " + (this._enabled ? "on" : "off"), dismissible: true, autoDestroyTime: 2e3 });
     }
     // Toggle the #ctx marker on the line that has the caret. The caret line is
     // identified by Thymer's own row class .listitem-with-caret (read-only DOM);
