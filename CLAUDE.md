@@ -41,8 +41,11 @@ For hot reload, run Chrome with remote debugging and enable it in the app:
 
 ## Rules that override convenience
 
-- **Never let plugin code touch the editor DOM.** A community plugin corrupted an
-  encrypted workspace beyond repair. Only `this.ui.*`.
+- **Never MUTATE Thymer-owned editor DOM** — no rewriting of Thymer's nodes. A
+  community plugin corrupted an encrypted workspace beyond repair that way. Relaxed
+  2026-08-08: appending/removing your OWN node in the panel's page container (in-flow,
+  with a remount observer) is acceptable — see the `thymer` skill's plugins.md
+  ("In-flow own-node mounting"). Prefer `this.ui.*` and read-only overlays where they fit.
 - **Never create pages or collections casually** — including for throwaway tests. Reuse
   what exists and clean up. If a task seems to require a genuinely new page or collection,
   ask first.
