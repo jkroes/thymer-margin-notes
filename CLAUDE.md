@@ -13,7 +13,18 @@ Mechanics (all repos identical): `./setup.sh` re-links `sdk/`, `bin/thymercli` a
 
 A note is a child line whose first segment is the hashtag `#ctx`; the rest of the line is
 the note text. The plugin renders these as sidenotes in the right margin (gutter ≥190px)
-or as ✻ glyph + popover when narrow. Notes are edited by clicking them (clearing the
+or as a dog-ear (folded corner at the row's top-right, `color-mix` of
+`--ed-text-color` so it theme-adapts; replaced the hardcoded-gold ✻ glyph 2026-08-10)
++ popover when narrow. The dog-ear is TWO elements: the visible 20px fold
+(`.mn-ear`) is an own-node absolutely positioned in the rows' container so it
+scrolls natively — a fixed overlay always lags compositor scrolling — while a
+transparent fixed `.mn-glyph` in the overlay is the click/hover target (hover is
+relayed via a class). Behind-the-text painting is DOM order, NOT negative
+z-index (that sinks below the panel's opaque ancestor bg — verified live): rows
+are `position:relative` z-auto, so the `.mn-ear-layer` is kept FIRST child of
+the rows' parent and later rows paint over it. Thymer re-renders dropping the
+layer, or prepending rows before it, are healed each `_reposition` pass.
+Notes are edited by clicking them (clearing the
 text deletes the line); lines become notes via the palette command or by typing a
 `#ctx` child. The hover-`+` margin authoring shipped briefly and was removed
 2026-08-03: it only handled the no-note case, appeared on every line, and was

@@ -35,11 +35,16 @@ var plugins = (() => {
   .mn-note { position: fixed; font: italic 12.5px/1.5 Georgia, "Times New Roman", serif;
     color: #c29c68; cursor: pointer; }
   .mn-note:hover { color: #e0b87d; }
-  .mn-glyph { position: fixed; width: 16px; height: 16px; border-radius: 50%;
-    border: 1px solid #8d7549; color: #c29c68; font: italic 700 10px Georgia, serif;
-    display: flex; align-items: center; justify-content: center; cursor: pointer;
-    background: transparent; padding: 0; }
-  .mn-glyph:hover { background: rgba(194, 156, 104, .18); }
+  .mn-glyph { position: fixed; width: 24px; height: 24px; padding: 0; border: 0;
+    background: transparent; cursor: pointer; }
+  .mn-ear-layer { position: relative; width: 0; height: 0; pointer-events: none; }
+  .mn-ear { position: absolute; width: 20px; height: 20px;
+    background: color-mix(in srgb, var(--ed-text-color, #888) 16%, transparent);
+    clip-path: polygon(100% 0, 0 0, 100% 100%);
+    transition: width .15s, height .15s, background .15s; }
+  .mn-ear.mn-ear-hover { width: 26px; height: 26px;
+    background: color-mix(in srgb, var(--ed-text-color, #888) 30%, transparent); }
+  @media (prefers-reduced-motion: reduce) { .mn-ear { transition: none; } }
   .mn-pop { position: fixed; width: 270px; background: #282d37; border: 1px solid #3d4350;
     border-radius: 8px; padding: 4px 0; font: 12.5px/1.5 Georgia, serif; font-style: italic;
     color: #d3b586; box-shadow: 0 8px 28px rgba(0,0,0,.5); }
@@ -122,6 +127,7 @@ var plugins = (() => {
       document.removeEventListener("scroll", this._onScroll, { capture: true });
       window.removeEventListener("resize", this._onResize);
       this._root?.remove();
+      for (const layer of document.querySelectorAll(".mn-ear-layer")) layer.remove();
       document.getElementById(STYLE_ID)?.remove();
       document.getElementById(MUTE_STYLE_ID)?.remove();
     }
@@ -300,6 +306,7 @@ var plugins = (() => {
       this._closeEditor();
       this._closePop();
       this._root.replaceChildren();
+      for (const layer of document.querySelectorAll(".mn-ear-layer")) layer.remove();
       this._rendered = [];
     }
     _anchorEl(guid, scope) {
@@ -332,8 +339,11 @@ var plugins = (() => {
               e.stopPropagation();
               this._onNoteClick(entry, note, el, pane.el);
             });
+            const r = { el, paneEl: pane.el, anchorGuid: entry.anchorGuid, note, index: i, earEl: null };
+            el.addEventListener("mouseenter", () => r.earEl?.classList.add("mn-ear-hover"));
+            el.addEventListener("mouseleave", () => r.earEl?.classList.remove("mn-ear-hover"));
             this._root.appendChild(el);
-            this._rendered.push({ el, paneEl: pane.el, anchorGuid: entry.anchorGuid, note, index: i });
+            this._rendered.push(r);
           });
         }
       }
@@ -350,31 +360,37 @@ var plugins = (() => {
       if (!this._rendered.length && !this._editing) return;
       const lastBottoms = /* @__PURE__ */ new Map();
       for (const r of this._rendered) {
+        const hide = /* @__PURE__ */ __name(() => {
+          r.el.style.display = "none";
+          if (r.earEl) r.earEl.style.display = "none";
+        }, "hide");
         const anchor = this._anchorEl(r.anchorGuid, r.paneEl);
         if (!anchor) {
-          r.el.style.display = "none";
+          hide();
           continue;
         }
         const src = this._anchorEl(r.note.guid, r.paneEl);
         if (src && src.classList.contains("listitem-with-caret")) {
-          r.el.style.display = "none";
+          hide();
           continue;
         }
         const rect = anchor.getBoundingClientRect();
-        if (rect.bottom < -40 || rect.top > innerHeight + 40) {
-          r.el.style.display = "none";
-          continue;
-        }
-        if (this._anchorCovered(anchor, rect)) {
-          r.el.style.display = "none";
-          continue;
-        }
         const gutter = this._gutterFor(anchor);
         const side = gutter >= SIDENOTE_MIN_GUTTER;
-        r.el.style.display = "";
         if (side) {
+          if (rect.bottom < -40 || rect.top > innerHeight + 40) {
+            hide();
+            continue;
+          }
+          if (this._anchorCovered(anchor, rect)) {
+            hide();
+            continue;
+          }
+          if (r.earEl) r.earEl.style.display = "none";
+          r.el.style.display = "";
           r.el.className = "mn-note";
           r.el.textContent = r.note.text || "(empty note)";
+          r.el.style.right = "";
           r.el.style.width = Math.min(gutter - 30, NOTE_WIDTH_MAX) + "px";
           r.el.style.left = rect.right + 14 + "px";
           let top = rect.top + r.index * 18;
@@ -384,16 +400,63 @@ var plugins = (() => {
           lastBottoms.set(r.paneEl, top + r.el.offsetHeight);
         } else {
           if (r.index > 0) {
-            r.el.style.display = "none";
+            hide();
             continue;
           }
+          r.el.style.display = "";
           r.el.className = "mn-glyph";
-          r.el.textContent = "\u273B";
+          r.el.textContent = "";
           r.el.style.width = "";
-          r.el.style.left = rect.right + 4 + "px";
-          r.el.style.top = rect.top + (rect.height - 16) / 2 + "px";
+          r.el.style.left = "";
+          r.el.style.right = innerWidth - rect.right + "px";
+          r.el.style.top = rect.top + "px";
+          this._placeEar(r, anchor, rect);
         }
       }
+    }
+    // The dog-ear visual: an absolutely positioned own-node inside the rows'
+    // container (the community own-node pattern, out-of-flow so zero layout
+    // impact). It scrolls with the content natively — the fixed overlay always
+    // lags compositor scrolling. Behind-the-text painting relies on DOM order,
+    // not negative z-index (which would drop below the panel's opaque ancestor
+    // background, verified live 2026-08-10): rows are position:relative with
+    // z auto, so keeping the layer FIRST among them paints every later row —
+    // text included — above the ear. Thymer re-renders may drop the layer or
+    // prepend rows before it; both are healed here on every pass.
+    _placeEar(r, anchor, rect) {
+      const parent = anchor.parentElement;
+      if (!parent) {
+        if (r.earEl) r.earEl.style.display = "none";
+        return;
+      }
+      let layer = parent.querySelector(":scope > .mn-ear-layer");
+      if (!layer) {
+        layer = document.createElement("div");
+        layer.className = "mn-ear-layer";
+      }
+      if (layer.previousElementSibling || !layer.isConnected) parent.prepend(layer);
+      if (!r.earEl || r.earEl.parentElement !== layer) {
+        r.earEl?.remove();
+        r.earEl = document.createElement("div");
+        r.earEl.className = "mn-ear";
+        layer.appendChild(r.earEl);
+      }
+      let earTop = rect.top + 3;
+      const walker = document.createTreeWalker(anchor, NodeFilter.SHOW_TEXT);
+      for (let n; n = walker.nextNode(); ) {
+        if (!n.textContent.trim()) continue;
+        const rr = document.createRange();
+        rr.selectNodeContents(n);
+        const line = rr.getClientRects()[0];
+        if (!line || !line.height) continue;
+        const fs = parseFloat(getComputedStyle(n.parentElement).fontSize) || line.height;
+        earTop = line.top + Math.max(0, (line.height - fs) / 2);
+        break;
+      }
+      const lr = layer.getBoundingClientRect();
+      r.earEl.style.display = "";
+      r.earEl.style.left = rect.right - lr.left - 20 + "px";
+      r.earEl.style.top = earTop - lr.top + "px";
     }
     // Occlusion: hide a note when its anchor row is visually covered by another
     // layer — a full-panel plugin overlay, a native modal, a sticky header. The

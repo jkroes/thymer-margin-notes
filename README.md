@@ -10,8 +10,9 @@ purely a different way of showing it:
 
 - **Wide panel** (≥190px of free margin): notes render as serif sidenotes in the right
   margin, aligned to their line, pushing each other down when anchors are close.
-- **Narrow panel**: annotated lines get a small ✻ glyph at their right edge; clicking
-  it floats the note in a popover.
+- **Narrow panel**: annotated lines get a small dog-ear — a folded corner flush with
+  the line's top-right edge, tinted from the theme's text color — that lifts slightly
+  on hover; clicking it floats the note in a popover.
 - **Margin wins**: the note lives in the margin whether its parent is expanded or
   collapsed — the `#ctx` line itself is collapsed out of the outline (zero height,
   CSS-only) so you never see a note twice. Put the caret on it (arrow through where
@@ -25,8 +26,8 @@ purely a different way of showing it:
 
 ![Glyph and popover at narrow width](docs/popover.png)
 
-*Narrow panel: one ✻ glyph per annotated line; clicking it stacks the line's notes in
-a popover.*
+*Narrow panel: one dog-ear per annotated line (screenshot predates it — it shows the
+old ✻ glyph); clicking it stacks the line's notes in a popover.*
 
 ## Usage
 
