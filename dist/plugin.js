@@ -35,14 +35,14 @@ var plugins = (() => {
   .mn-note { position: absolute; font: italic 12.5px/1.5 Georgia, "Times New Roman", serif;
     color: #c29c68; cursor: pointer; pointer-events: auto; }
   .mn-note:hover { color: #e0b87d; }
-  .mn-glyph { position: fixed; width: 24px; height: 24px; padding: 0; border: 0;
+  .mn-glyph { position: fixed; width: 28px; height: 28px; padding: 0; border: 0;
     background: transparent; cursor: pointer; }
   .mn-ear-layer { position: relative; width: 100%; height: 0; pointer-events: none; }
-  .mn-ear { position: absolute; width: 20px; height: 20px;
+  .mn-ear { position: absolute; width: 26px; height: 26px;
     background: color-mix(in srgb, var(--ed-text-color, #888) 16%, transparent);
     clip-path: polygon(100% 0, 0 0, 100% 100%);
-    transition: width .15s, height .15s, background .15s; }
-  .mn-ear.mn-ear-hover { width: 26px; height: 26px;
+    transition: background .15s; }
+  .mn-ear.mn-ear-hover {
     background: color-mix(in srgb, var(--ed-text-color, #888) 30%, transparent); }
   @media (prefers-reduced-motion: reduce) { .mn-ear { transition: none; } }
   .mn-pop { position: fixed; width: 270px; background: #282d37; border: 1px solid #3d4350;
@@ -438,6 +438,24 @@ var plugins = (() => {
       if (layer.previousElementSibling || !layer.isConnected) parent.prepend(layer);
       return layer;
     }
+    // Font box ascent/descent plus how far below the box top the tall glyphs
+    // ("Al" ascender/cap) visually start. Canvas-measured, cached per font.
+    _fontMetrics(style) {
+      const key = style.fontWeight + " " + style.fontSize + " " + style.fontFamily;
+      let m = (this._fontCache ??= /* @__PURE__ */ new Map()).get(key);
+      if (!m) {
+        const ctx = this._measureCtx ??= document.createElement("canvas").getContext("2d");
+        ctx.font = key;
+        const t = ctx.measureText("Al");
+        m = {
+          ascent: t.fontBoundingBoxAscent,
+          descent: t.fontBoundingBoxDescent,
+          glyphInset: t.fontBoundingBoxAscent - t.actualBoundingBoxAscent
+        };
+        this._fontCache.set(key, m);
+      }
+      return m;
+    }
     _placeEar(r, anchor, rect) {
       const layer = this._earLayer(anchor);
       if (!layer) {
@@ -450,7 +468,7 @@ var plugins = (() => {
         r.earEl.className = "mn-ear";
         layer.appendChild(r.earEl);
       }
-      let earTop = rect.top + 3;
+      let earTop = rect.top + 5;
       const walker = document.createTreeWalker(anchor, NodeFilter.SHOW_TEXT);
       for (let n; n = walker.nextNode(); ) {
         if (!n.textContent.trim()) continue;
@@ -458,8 +476,8 @@ var plugins = (() => {
         rr.selectNodeContents(n);
         const line = rr.getClientRects()[0];
         if (!line || !line.height) continue;
-        const fs = parseFloat(getComputedStyle(n.parentElement).fontSize) || line.height;
-        earTop = line.top + Math.max(0, (line.height - fs) / 2);
+        const fm = this._fontMetrics(getComputedStyle(n.parentElement));
+        earTop = line.top + Math.max(0, (line.height - (fm.ascent + fm.descent)) / 2) + fm.glyphInset;
         break;
       }
       const lr = layer.getBoundingClientRect();
