@@ -46,7 +46,7 @@ status bar item or the palette command "Margin Notes: toggle display" (same
 `_toggleDisplay()`, localStorage per device; a plugin can register multiple
 palette commands — an earlier one-per-plugin assumption was wrong, community
 plugins register up to 15). The palette command "Margin Notes:
-toggle #ctx on current line" converts the caret line to/from contextual content —
+Toggle line contextual content" converts the caret line to/from contextual content —
 the caret line is found via Thymer's own row class `.listitem.listitem-with-caret`
 (read-only DOM; fills the SDK's missing `getFocusedLineItem()`). Top-level lines are
 refused (no parent line to annotate).

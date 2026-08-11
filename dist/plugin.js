@@ -101,7 +101,7 @@ var plugins = (() => {
         onClick: /* @__PURE__ */ __name(() => this._toggleDisplay(), "onClick")
       });
       this.ui.addCommandPaletteCommand({
-        label: "Margin Notes: toggle #ctx on current line",
+        label: "Margin Notes: Toggle line contextual content",
         icon: "ti-notes",
         onSelected: /* @__PURE__ */ __name(() => this._toggleCaretLine(), "onSelected")
       });
