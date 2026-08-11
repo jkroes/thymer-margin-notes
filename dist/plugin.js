@@ -229,7 +229,11 @@ var plugins = (() => {
     _toggleDisplay() {
       this._enabled = !this._enabled;
       localStorage.setItem("mn-enabled", this._enabled ? "1" : "0");
-      this._enabled ? this._refreshSoon(0) : this._clear();
+      if (this._enabled) this._refreshSoon(0);
+      else {
+        this._clear();
+        this._muteStyle.textContent = "";
+      }
       this.ui.addToaster({ title: "Margin Notes", message: "Margin notes " + (this._enabled ? "on" : "off"), dismissible: true, autoDestroyTime: 2e3 });
     }
     // Toggle the #ctx marker on the line that has the caret. The caret line is
@@ -312,7 +316,12 @@ var plugins = (() => {
         this._muteStyle.textContent = "";
         return;
       }
-      this._muteStyle.textContent = [...this._noteGuids].map((g) => `.listitem[data-guid="${g}"] { opacity: .55; font-style: italic; }`).join("\n");
+      const withNote = /* @__PURE__ */ new Set();
+      for (const model of this._models.values())
+        for (const entry of model)
+          for (const n of entry.notes) withNote.add(n.guid);
+      this._muteStyle.textContent = [...this._noteGuids].map((g) => withNote.has(g) ? `.listitem[data-guid="${g}"]:not(.listitem-with-caret) { height: 0 !important; min-height: 0 !important; overflow: hidden; padding-top: 0 !important; padding-bottom: 0 !important; margin-top: 0 !important; margin-bottom: 0 !important; }
+.listitem[data-guid="${g}"].listitem-with-caret { opacity: .55; font-style: italic; }` : `.listitem[data-guid="${g}"] { opacity: .55; font-style: italic; }`).join("\n");
       for (const pane of this._panes) {
         const model = this._models.get(pane.recGuid) || [];
         for (const entry of model) {
@@ -346,7 +355,8 @@ var plugins = (() => {
           r.el.style.display = "none";
           continue;
         }
-        if (this._anchorEl(r.note.guid, r.paneEl)) {
+        const src = this._anchorEl(r.note.guid, r.paneEl);
+        if (src && src.classList.contains("listitem-with-caret")) {
           r.el.style.display = "none";
           continue;
         }

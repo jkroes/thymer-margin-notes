@@ -12,9 +12,12 @@ purely a different way of showing it:
   margin, aligned to their line, pushing each other down when anchors are close.
 - **Narrow panel**: annotated lines get a small ✻ glyph at their right edge; clicking
   it floats the note in a popover.
-- **Expanded vs collapsed**: if a `#ctx` line is visible in the outline (its parent is
-  expanded), the margin stays quiet and the line renders dimmed + italic instead — you
-  never see a note twice. Collapse the parent and the sidenote comes back.
+- **Margin wins**: the note lives in the margin whether its parent is expanded or
+  collapsed — the `#ctx` line itself is collapsed out of the outline (zero height,
+  CSS-only) so you never see a note twice. Put the caret on it (arrow through where
+  it sits) and it expands in place, dimmed + italic, for in-outline editing; empty
+  `#ctx` lines stay visible-but-dimmed so you can delete them. Toggling display off
+  restores every line.
 
 ![Sidenotes in the right margin](docs/sidenotes.png)
 

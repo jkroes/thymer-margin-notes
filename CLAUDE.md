@@ -41,11 +41,19 @@ Verified live on the web client, 0.0.18 / desktop v1.0.18 era (2026-08-03):
 - End-to-end verified over CDP: sidenote rendering + alignment, hover-`+` authoring,
   click-to-edit prefill, clear-to-delete. Popover (narrow) mode logic shipped but only
   exercised in a mockup, not live.
-- **Tree/margin mutual exclusion + muting** (verified live both directions): when a
-  `#ctx` line's own `.listitem` is in the DOM (parent expanded), its margin note hides
-  and the tree line is muted via guid-targeted CSS (`opacity:.55; font-style:italic`,
-  second injected style tag). Collapse removes the line from the DOM → the sidenote
-  returns within one 1200ms tick (collapse fires no lineitem event; the tick catches it).
+- **Margin wins** (reworked 2026-08-10; the original tree-wins mutual exclusion meant
+  notes never showed while reading, since reading requires the parent expanded): a
+  `#ctx` line with a note is collapsed out of the tree via guid-targeted CSS
+  (`height:0 !important` + padding/margin zeroed, second injected style tag) and the
+  note renders regardless of expansion. **NOT `display:none`** — Thymer's caret
+  movement is geometry-based and a display:none row traps the caret at the end of the
+  previous line, blocking keyboard nav past it (verified live). A zero-height row
+  stays navigable: caret lands on it, the `.listitem-with-caret` escape in the same
+  rule expands it (muted `opacity:.55; font-style:italic`) and `_reposition` hides
+  that note while the caret sits there (next tick); leaving re-collapses it. Empty
+  `#ctx` lines keep the old visible-but-muted treatment (no note stands in for them,
+  and the user must be able to see them to delete them). Toggle-off clears the mute
+  stylesheet explicitly (`_toggleDisplay`), else lines would stay collapsed.
 - **Plugins must not delete lines in the open document.** The margin editor originally
   deleted the `#ctx` line when its text was cleared; a subsequent ⌘Z crashed the app
   with `EDITOR_TREE_CORRUPTION: prev_sibling not found in parent.children` (2026-08-03)

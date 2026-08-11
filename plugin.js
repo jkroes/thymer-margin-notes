@@ -240,7 +240,8 @@ export class Plugin extends AppPlugin {
     _toggleDisplay() {
         this._enabled = !this._enabled;
         localStorage.setItem("mn-enabled", this._enabled ? "1" : "0");
-        this._enabled ? this._refreshSoon(0) : this._clear();
+        if (this._enabled) this._refreshSoon(0);
+        else { this._clear(); this._muteStyle.textContent = ""; } // off must un-hide the tree lines
         this.ui.addToaster({ title: "Margin Notes", message: "Margin notes " + (this._enabled ? "on" : "off"), dismissible: true, autoDestroyTime: 2000 });
     }
 
@@ -316,11 +317,27 @@ export class Plugin extends AppPlugin {
     _render() {
         this._clear();
         if (!this._enabled) { this._muteStyle.textContent = ""; return; }
-        // Mute expanded #ctx lines in the tree: CSS-only (no DOM mutation), scoped to
-        // exact guids, so an annotation reads as marginalia even when its source shows.
-        // Guid-keyed CSS is intentionally global — the muting applies in every pane.
+        // Margin wins: a #ctx line whose note renders in the margin is collapsed to
+        // zero height in the tree, so expanding the parent (needed to read the real
+        // children) never shows the note twice. CSS-only (no DOM mutation), scoped
+        // to exact guids, intentionally global across panes. Zero-height, NOT
+        // display:none — Thymer's caret movement is geometry-based and a display:none
+        // row traps the caret at the end of the previous line (verified live
+        // 2026-08-10); a zero-height row stays navigable. The :not(.listitem-with-caret)
+        // guard expands the line while Thymer's caret is on it (rendered muted, so it
+        // still reads as marginalia), collapsing again when the caret leaves. Empty
+        // #ctx lines have no margin note to stand in for them, so they stay
+        // visible-but-muted (the user deletes them by hand; invisible would make
+        // that impossible).
+        const withNote = new Set();
+        for (const model of this._models.values())
+            for (const entry of model)
+                for (const n of entry.notes) withNote.add(n.guid);
         this._muteStyle.textContent = [...this._noteGuids]
-            .map((g) => `.listitem[data-guid="${g}"] { opacity: .55; font-style: italic; }`)
+            .map((g) => withNote.has(g)
+                ? `.listitem[data-guid="${g}"]:not(.listitem-with-caret) { height: 0 !important; min-height: 0 !important; overflow: hidden; padding-top: 0 !important; padding-bottom: 0 !important; margin-top: 0 !important; margin-bottom: 0 !important; }\n` +
+                  `.listitem[data-guid="${g}"].listitem-with-caret { opacity: .55; font-style: italic; }`
+                : `.listitem[data-guid="${g}"] { opacity: .55; font-style: italic; }`)
             .join("\n");
         for (const pane of this._panes) {
             const model = this._models.get(pane.recGuid) || [];
@@ -356,10 +373,12 @@ export class Plugin extends AppPlugin {
         for (const r of this._rendered) {
             const anchor = this._anchorEl(r.anchorGuid, r.paneEl);
             if (!anchor) { r.el.style.display = "none"; continue; }
-            // Mutual exclusion per pane: if the #ctx line itself is rendered in THIS
-            // pane (parent expanded), the user is looking at the source there — keep
-            // that pane's margin quiet; other panes still show the note.
-            if (this._anchorEl(r.note.guid, r.paneEl)) { r.el.style.display = "none"; continue; }
+            // The tree line is CSS-collapsed when the parent is expanded (margin wins),
+            // so the note renders regardless — except while the caret sits on the
+            // #ctx line itself: the caret escape makes the source visible there, and
+            // showing both would duplicate it. The tick catches caret moves.
+            const src = this._anchorEl(r.note.guid, r.paneEl);
+            if (src && src.classList.contains("listitem-with-caret")) { r.el.style.display = "none"; continue; }
             const rect = anchor.getBoundingClientRect();
             if (rect.bottom < -40 || rect.top > innerHeight + 40) { r.el.style.display = "none"; continue; }
             if (this._anchorCovered(anchor, rect)) { r.el.style.display = "none"; continue; }
