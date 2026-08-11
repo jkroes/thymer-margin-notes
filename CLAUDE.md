@@ -29,6 +29,14 @@ z-index (that sinks below the panel's opaque ancestor bg — verified live): row
 are `position:relative` z-auto, so the `.mn-ear-layer` is kept FIRST child of
 the rows' parent and later rows paint over it. Thymer re-renders dropping the
 layer, or prepending rows before it, are healed each `_reposition` pass.
+KNOWN LIMITATION (accepted 2026-08-10): on a FOLDED row, Thymer's collapsed-box
+background (`--ed-folded-bg-color`, ~50% alpha) paints over the ear like
+everything else on the row, so the overlap corner shows both tints compounded —
+a slightly different shade than either alone. The ear's top-right corner
+carries the same `--ed-radius-normal` rounding as the collapsed box (triangle
+drawn via diagonal gradient, since border-radius doesn't clip `clip-path`
+shapes) so at least the corner curves match. Putting the ear above the box
+would put it above the row's text too — not worth it.
 Notes are edited by clicking them (clearing the
 text deletes the line); lines become notes via the palette command or by typing a
 `#ctx` child. The hover-`+` margin authoring shipped briefly and was removed

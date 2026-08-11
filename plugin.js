@@ -27,12 +27,14 @@ const CSS = `
   .mn-glyph { position: fixed; width: 28px; height: 28px; padding: 0; border: 0;
     background: transparent; cursor: pointer; }
   .mn-ear-layer { position: relative; width: 100%; height: 0; pointer-events: none; }
-  .mn-ear { position: absolute; width: 26px; height: 26px;
-    background: color-mix(in srgb, var(--ed-text-color, #888) 16%, transparent);
-    clip-path: polygon(100% 0, 0 0, 100% 100%);
+  .mn-ear { position: absolute; width: 21px; height: 21px;
+    border-top-right-radius: var(--ed-radius-normal, 3px);
+    background: linear-gradient(to bottom left,
+      color-mix(in srgb, var(--ed-text-color, #888) 16%, transparent) 50%, transparent 50%);
     transition: background .15s; }
   .mn-ear.mn-ear-hover {
-    background: color-mix(in srgb, var(--ed-text-color, #888) 30%, transparent); }
+    background: linear-gradient(to bottom left,
+      color-mix(in srgb, var(--ed-text-color, #888) 30%, transparent) 50%, transparent 50%); }
   @media (prefers-reduced-motion: reduce) { .mn-ear { transition: none; } }
   .mn-pop { position: fixed; width: 270px; background: #282d37; border: 1px solid #3d4350;
     border-radius: 8px; padding: 4px 0; font: 12.5px/1.5 Georgia, serif; font-style: italic;
@@ -457,25 +459,6 @@ export class Plugin extends AppPlugin {
         return layer;
     }
 
-    // Font box ascent/descent plus how far below the box top the tall glyphs
-    // ("Al" ascender/cap) visually start. Canvas-measured, cached per font.
-    _fontMetrics(style) {
-        const key = style.fontWeight + " " + style.fontSize + " " + style.fontFamily;
-        let m = (this._fontCache ??= new Map()).get(key);
-        if (!m) {
-            const ctx = (this._measureCtx ??= document.createElement("canvas").getContext("2d"));
-            ctx.font = key;
-            const t = ctx.measureText("Al");
-            m = {
-                ascent: t.fontBoundingBoxAscent,
-                descent: t.fontBoundingBoxDescent,
-                glyphInset: t.fontBoundingBoxAscent - t.actualBoundingBoxAscent,
-            };
-            this._fontCache.set(key, m);
-        }
-        return m;
-    }
-
     _placeEar(r, anchor, rect) {
         const layer = this._earLayer(anchor);
         if (!layer) { if (r.earEl) r.earEl.style.display = "none"; return; }
@@ -486,23 +469,8 @@ export class Plugin extends AppPlugin {
             layer.appendChild(r.earEl);
         }
         // Same-frame rects make these offsets scroll-invariant. The fold's top
-        // sits flush with the visual top of the first text line: from the
-        // line's Range rect, half-leading places the font bounding box, then
-        // the font's own metrics (canvas measureText, cached per font) give
-        // where ascenders/caps actually start below the box top. Metric-based
-        // so heading rows and font changes stay aligned without retuning.
-        let earTop = rect.top + 5; // fallback: ≈ padding + typical glyph inset
-        const walker = document.createTreeWalker(anchor, NodeFilter.SHOW_TEXT);
-        for (let n; (n = walker.nextNode()); ) {
-            if (!n.textContent.trim()) continue;
-            const rr = document.createRange();
-            rr.selectNodeContents(n);
-            const line = rr.getClientRects()[0];
-            if (!line || !line.height) continue;
-            const fm = this._fontMetrics(getComputedStyle(n.parentElement));
-            earTop = line.top + Math.max(0, (line.height - (fm.ascent + fm.descent)) / 2) + fm.glyphInset;
-            break;
-        }
+        // sits flush with the row box top — the same box Thymer paints as the
+        // collapsed-row background, so the two align when a row is folded.
         // Right-anchored for the same reason as the sidenote: the layer-right →
         // row-right delta survives a live resize, so the fold tracks the edge
         // via CSS while the window is being dragged.
@@ -510,7 +478,7 @@ export class Plugin extends AppPlugin {
         r.earEl.style.display = "";
         r.earEl.style.left = "";
         r.earEl.style.right = lr.right - rect.right + "px";
-        r.earEl.style.top = earTop - lr.top + "px";
+        r.earEl.style.top = rect.top - lr.top + "px";
     }
 
     // ---- popover (narrow mode) ----
