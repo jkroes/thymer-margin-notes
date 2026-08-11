@@ -32,8 +32,8 @@ var plugins = (() => {
   var CSS = `
   .mn-root { position: fixed; inset: 0 auto auto 0; width: 0; height: 0; z-index: 480; pointer-events: none; }
   .mn-root > * { pointer-events: auto; }
-  .mn-note { position: fixed; font: italic 12.5px/1.5 Georgia, "Times New Roman", serif;
-    color: #c29c68; cursor: pointer; }
+  .mn-note { position: absolute; font: italic 12.5px/1.5 Georgia, "Times New Roman", serif;
+    color: #c29c68; cursor: pointer; pointer-events: auto; }
   .mn-note:hover { color: #e0b87d; }
   .mn-glyph { position: fixed; width: 24px; height: 24px; padding: 0; border: 0;
     background: transparent; cursor: pointer; }
@@ -117,13 +117,11 @@ var plugins = (() => {
       document.addEventListener("scroll", this._onScroll, { capture: true, passive: true });
       window.addEventListener("resize", this._onResize);
       this._tick = setInterval(() => this._reposition(), 1200);
-      this._panelObs = new MutationObserver(() => this._reposition());
       this._refreshSoon(400);
     }
     onUnload() {
       for (const h of this._handlers) this.events.off(h);
       clearInterval(this._tick);
-      this._panelObs?.disconnect();
       document.removeEventListener("scroll", this._onScroll, { capture: true });
       window.removeEventListener("resize", this._onResize);
       this._root?.remove();
@@ -347,13 +345,6 @@ var plugins = (() => {
           });
         }
       }
-      if (this._panelObs) {
-        this._panelObs.disconnect();
-        for (const pane of this._panes) {
-          const host = pane.el && (pane.el.closest(".panel") || pane.el);
-          if (host) this._panelObs.observe(host, { childList: true });
-        }
-      }
       this._reposition();
     }
     _reposition() {
@@ -378,31 +369,31 @@ var plugins = (() => {
         const gutter = this._gutterFor(anchor);
         const side = gutter >= SIDENOTE_MIN_GUTTER;
         if (side) {
-          if (rect.bottom < -40 || rect.top > innerHeight + 40) {
-            hide();
-            continue;
-          }
-          if (this._anchorCovered(anchor, rect)) {
+          const layer = this._earLayer(anchor);
+          if (!layer) {
             hide();
             continue;
           }
           if (r.earEl) r.earEl.style.display = "none";
+          if (r.el.parentElement !== layer) layer.appendChild(r.el);
+          const lr = layer.getBoundingClientRect();
           r.el.style.display = "";
           r.el.className = "mn-note";
           r.el.textContent = r.note.text || "(empty note)";
           r.el.style.right = "";
           r.el.style.width = Math.min(gutter - 30, NOTE_WIDTH_MAX) + "px";
-          r.el.style.left = rect.right + 14 + "px";
-          let top = rect.top + r.index * 18;
-          const lastBottom = lastBottoms.get(r.paneEl) ?? -1e9;
+          r.el.style.left = rect.right + 14 - lr.left + "px";
+          let top = rect.top - lr.top + r.index * 18;
+          const lastBottom = lastBottoms.get(layer) ?? -1e9;
           if (top < lastBottom + 8) top = lastBottom + 8;
           r.el.style.top = top + "px";
-          lastBottoms.set(r.paneEl, top + r.el.offsetHeight);
+          lastBottoms.set(layer, top + r.el.offsetHeight);
         } else {
           if (r.index > 0) {
             hide();
             continue;
           }
+          if (r.el.parentElement !== this._root) this._root.appendChild(r.el);
           r.el.style.display = "";
           r.el.className = "mn-glyph";
           r.el.textContent = "";
@@ -414,27 +405,41 @@ var plugins = (() => {
         }
       }
     }
-    // The dog-ear visual: an absolutely positioned own-node inside the rows'
-    // container (the community own-node pattern, out-of-flow so zero layout
-    // impact). It scrolls with the content natively — the fixed overlay always
-    // lags compositor scrolling. Behind-the-text painting relies on DOM order,
-    // not negative z-index (which would drop below the panel's opaque ancestor
-    // background, verified live 2026-08-10): rows are position:relative with
-    // z auto, so keeping the layer FIRST among them paints every later row —
-    // text included — above the ear. Thymer re-renders may drop the layer or
-    // prepend rows before it; both are healed here on every pass.
-    _placeEar(r, anchor, rect) {
+    // Per-pane layer holding the dog-ears and sidenotes: an own-node inside the
+    // rows' container (the community own-node pattern, out-of-flow so zero
+    // layout impact) so its children scroll with the content natively — a fixed
+    // overlay always lags compositor scrolling. The ear's behind-the-text
+    // painting relies on DOM order, not negative z-index (which would drop
+    // below the panel's opaque ancestor background, verified live 2026-08-10):
+    // rows are position:relative with z auto, so keeping the layer FIRST among
+    // them paints every later row — text included — above the ear. Thymer
+    // re-renders may drop the layer or prepend rows before it; both are healed
+    // here on every pass. Because it lives inside the editor's scroller it
+    // swallows raw mouse events exactly like the overlay root does — Thymer's
+    // document-level coordinate handlers must never see clicks on a note.
+    _earLayer(anchor) {
       const parent = anchor.parentElement;
-      if (!parent) {
-        if (r.earEl) r.earEl.style.display = "none";
-        return;
-      }
+      if (!parent) return null;
       let layer = parent.querySelector(":scope > .mn-ear-layer");
       if (!layer) {
         layer = document.createElement("div");
         layer.className = "mn-ear-layer";
+        for (const evName of ["mousedown", "mouseup", "dblclick"]) {
+          layer.addEventListener(evName, (e) => {
+            e.stopPropagation();
+            if (evName === "mousedown") e.preventDefault();
+          });
+        }
       }
       if (layer.previousElementSibling || !layer.isConnected) parent.prepend(layer);
+      return layer;
+    }
+    _placeEar(r, anchor, rect) {
+      const layer = this._earLayer(anchor);
+      if (!layer) {
+        if (r.earEl) r.earEl.style.display = "none";
+        return;
+      }
       if (!r.earEl || r.earEl.parentElement !== layer) {
         r.earEl?.remove();
         r.earEl = document.createElement("div");
@@ -457,21 +462,6 @@ var plugins = (() => {
       r.earEl.style.display = "";
       r.earEl.style.left = rect.right - lr.left - 20 + "px";
       r.earEl.style.top = earTop - lr.top + "px";
-    }
-    // Occlusion: hide a note when its anchor row is visually covered by another
-    // layer — a full-panel plugin overlay, a native modal, a sticky header. The
-    // topmost element at the row's center tells us: anything inside the row's own
-    // scroller is just the editor painting itself (selection layers etc.); anything
-    // outside it is a cover. Read-only (elementFromPoint), no DOM mutation.
-    _anchorCovered(anchor, rect) {
-      const cy = rect.top + rect.height / 2;
-      if (cy < 0 || cy >= innerHeight) return false;
-      const cx = Math.min(Math.max(rect.left + rect.width / 2, 0), innerWidth - 1);
-      const el = document.elementFromPoint(cx, cy);
-      if (!el || anchor.contains(el)) return false;
-      if (this._root.contains(el)) return false;
-      const scroller = anchor.closest(".panel-scroller-y");
-      return scroller ? !scroller.contains(el) : false;
     }
     // ---- popover (narrow mode) ----
     _onNoteClick(entry, note, el, paneEl) {

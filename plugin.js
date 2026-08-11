@@ -21,8 +21,8 @@ const MUTE_STYLE_ID = "margin-notes-mute";
 const CSS = `
   .mn-root { position: fixed; inset: 0 auto auto 0; width: 0; height: 0; z-index: 480; pointer-events: none; }
   .mn-root > * { pointer-events: auto; }
-  .mn-note { position: fixed; font: italic 12.5px/1.5 Georgia, "Times New Roman", serif;
-    color: #c29c68; cursor: pointer; }
+  .mn-note { position: absolute; font: italic 12.5px/1.5 Georgia, "Times New Roman", serif;
+    color: #c29c68; cursor: pointer; pointer-events: auto; }
   .mn-note:hover { color: #e0b87d; }
   .mn-glyph { position: fixed; width: 24px; height: 24px; padding: 0; border: 0;
     background: transparent; cursor: pointer; }
@@ -119,19 +119,12 @@ export class Plugin extends AppPlugin {
         // Catch re-renders, collapses, and virtualization the events don't cover.
         this._tick = setInterval(() => this._reposition(), 1200);
 
-        // Panel-level overlays (Link-to-Line, etc.) mount/unmount as direct panel
-        // children with no event and no scroll — reposition immediately so the
-        // occlusion check runs without waiting for the tick. Observed panels are
-        // (re)registered in _render(); observing is read-only.
-        this._panelObs = new MutationObserver(() => this._reposition());
-
         this._refreshSoon(400);
     }
 
     onUnload() {
         for (const h of this._handlers) this.events.off(h);
         clearInterval(this._tick);
-        this._panelObs?.disconnect();
         document.removeEventListener("scroll", this._onScroll, { capture: true });
         window.removeEventListener("resize", this._onResize);
         this._root?.remove();
@@ -364,25 +357,12 @@ export class Plugin extends AppPlugin {
                 });
             }
         }
-        // Re-register the overlay observer on the current set of panel elements
-        // (childList only — panel direct children are stable except for overlays,
-        // so this stays quiet during normal typing).
-        if (this._panelObs) {
-            this._panelObs.disconnect();
-            for (const pane of this._panes) {
-                // getElement() returns a node INSIDE the panel (verified live: the
-                // overlay-hosting .panel is an ancestor of it, not it) — walk up so
-                // we watch the element overlays actually mount into.
-                const host = pane.el && (pane.el.closest(".panel") || pane.el);
-                if (host) this._panelObs.observe(host, { childList: true });
-            }
-        }
         this._reposition();
     }
 
     _reposition() {
         if (!this._rendered.length && !this._editing) return;
-        const lastBottoms = new Map(); // paneEl -> bottom of last placed sidenote in that pane
+        const lastBottoms = new Map(); // layer -> bottom of last placed sidenote (layer coords)
         for (const r of this._rendered) {
             const hide = () => { r.el.style.display = "none"; if (r.earEl) r.earEl.style.display = "none"; };
             const anchor = this._anchorEl(r.anchorGuid, r.paneEl);
@@ -397,27 +377,36 @@ export class Plugin extends AppPlugin {
             const gutter = this._gutterFor(anchor);
             const side = gutter >= SIDENOTE_MIN_GUTTER;
             if (side) {
-                if (rect.bottom < -40 || rect.top > innerHeight + 40) { hide(); continue; }
-                if (this._anchorCovered(anchor, rect)) { hide(); continue; }
+                // The note lives in the in-scroller layer (same technique as the
+                // dog-ear) so it scrolls natively with its line; the scroller's
+                // own overflow clips it, so no viewport culling is needed. The
+                // gutter is inside the scroller but right of every row, so the
+                // note stays directly clickable — the layer swallows the raw
+                // mouse events the overlay root used to.
+                const layer = this._earLayer(anchor);
+                if (!layer) { hide(); continue; }
                 if (r.earEl) r.earEl.style.display = "none";
+                if (r.el.parentElement !== layer) layer.appendChild(r.el);
+                const lr = layer.getBoundingClientRect();
                 r.el.style.display = "";
                 r.el.className = "mn-note";
                 r.el.textContent = r.note.text || "(empty note)";
                 r.el.style.right = "";
                 r.el.style.width = Math.min(gutter - 30, NOTE_WIDTH_MAX) + "px";
-                r.el.style.left = rect.right + 14 + "px";
-                let top = rect.top + r.index * 18;
-                const lastBottom = lastBottoms.get(r.paneEl) ?? -1e9;
+                r.el.style.left = rect.right + 14 - lr.left + "px";
+                let top = rect.top - lr.top + r.index * 18;
+                const lastBottom = lastBottoms.get(layer) ?? -1e9;
                 if (top < lastBottom + 8) top = lastBottom + 8;
                 r.el.style.top = top + "px";
-                lastBottoms.set(r.paneEl, top + r.el.offsetHeight);
+                lastBottoms.set(layer, top + r.el.offsetHeight);
             } else {
                 // One dog-ear per line regardless of note count; the popover stacks
-                // them. The visible fold is an own-node in the scroller (scrolls
-                // natively, z-index -1 puts it BEHIND the row text); the fixed
-                // overlay element is only a transparent hit target over it, and is
-                // placed even off-viewport so no culling lag appears on scroll.
+                // them. The visible fold lives in the in-scroller layer; the fixed
+                // overlay element is only a transparent hit target over it (the fold
+                // paints behind the row, so the row would otherwise eat its clicks),
+                // and is placed even off-viewport so no culling lag appears on scroll.
                 if (r.index > 0) { hide(); continue; }
+                if (r.el.parentElement !== this._root) this._root.appendChild(r.el);
                 r.el.style.display = "";
                 r.el.className = "mn-glyph";
                 r.el.textContent = "";
@@ -430,24 +419,39 @@ export class Plugin extends AppPlugin {
         }
     }
 
-    // The dog-ear visual: an absolutely positioned own-node inside the rows'
-    // container (the community own-node pattern, out-of-flow so zero layout
-    // impact). It scrolls with the content natively — the fixed overlay always
-    // lags compositor scrolling. Behind-the-text painting relies on DOM order,
-    // not negative z-index (which would drop below the panel's opaque ancestor
-    // background, verified live 2026-08-10): rows are position:relative with
-    // z auto, so keeping the layer FIRST among them paints every later row —
-    // text included — above the ear. Thymer re-renders may drop the layer or
-    // prepend rows before it; both are healed here on every pass.
-    _placeEar(r, anchor, rect) {
+    // Per-pane layer holding the dog-ears and sidenotes: an own-node inside the
+    // rows' container (the community own-node pattern, out-of-flow so zero
+    // layout impact) so its children scroll with the content natively — a fixed
+    // overlay always lags compositor scrolling. The ear's behind-the-text
+    // painting relies on DOM order, not negative z-index (which would drop
+    // below the panel's opaque ancestor background, verified live 2026-08-10):
+    // rows are position:relative with z auto, so keeping the layer FIRST among
+    // them paints every later row — text included — above the ear. Thymer
+    // re-renders may drop the layer or prepend rows before it; both are healed
+    // here on every pass. Because it lives inside the editor's scroller it
+    // swallows raw mouse events exactly like the overlay root does — Thymer's
+    // document-level coordinate handlers must never see clicks on a note.
+    _earLayer(anchor) {
         const parent = anchor.parentElement;
-        if (!parent) { if (r.earEl) r.earEl.style.display = "none"; return; }
+        if (!parent) return null;
         let layer = parent.querySelector(":scope > .mn-ear-layer");
         if (!layer) {
             layer = document.createElement("div");
             layer.className = "mn-ear-layer";
+            for (const evName of ["mousedown", "mouseup", "dblclick"]) {
+                layer.addEventListener(evName, (e) => {
+                    e.stopPropagation();
+                    if (evName === "mousedown") e.preventDefault();
+                });
+            }
         }
         if (layer.previousElementSibling || !layer.isConnected) parent.prepend(layer);
+        return layer;
+    }
+
+    _placeEar(r, anchor, rect) {
+        const layer = this._earLayer(anchor);
+        if (!layer) { if (r.earEl) r.earEl.style.display = "none"; return; }
         if (!r.earEl || r.earEl.parentElement !== layer) {
             r.earEl?.remove();
             r.earEl = document.createElement("div");
@@ -474,22 +478,6 @@ export class Plugin extends AppPlugin {
         r.earEl.style.display = "";
         r.earEl.style.left = rect.right - lr.left - 20 + "px";
         r.earEl.style.top = earTop - lr.top + "px";
-    }
-
-    // Occlusion: hide a note when its anchor row is visually covered by another
-    // layer — a full-panel plugin overlay, a native modal, a sticky header. The
-    // topmost element at the row's center tells us: anything inside the row's own
-    // scroller is just the editor painting itself (selection layers etc.); anything
-    // outside it is a cover. Read-only (elementFromPoint), no DOM mutation.
-    _anchorCovered(anchor, rect) {
-        const cy = rect.top + rect.height / 2;
-        if (cy < 0 || cy >= innerHeight) return false; // off-viewport: the ±40 tolerance handles it
-        const cx = Math.min(Math.max(rect.left + rect.width / 2, 0), innerWidth - 1);
-        const el = document.elementFromPoint(cx, cy);
-        if (!el || anchor.contains(el)) return false;
-        if (this._root.contains(el)) return false; // our own popover/editor never counts
-        const scroller = anchor.closest(".panel-scroller-y");
-        return scroller ? !scroller.contains(el) : false;
     }
 
     // ---- popover (narrow mode) ----

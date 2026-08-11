@@ -15,10 +15,15 @@ A note is a child line whose first segment is the hashtag `#ctx`; the rest of th
 the note text. The plugin renders these as sidenotes in the right margin (gutter ≥190px)
 or as a dog-ear (folded corner at the row's top-right, `color-mix` of
 `--ed-text-color` so it theme-adapts; replaced the hardcoded-gold ✻ glyph 2026-08-10)
-+ popover when narrow. The dog-ear is TWO elements: the visible 20px fold
-(`.mn-ear`) is an own-node absolutely positioned in the rows' container so it
-scrolls natively — a fixed overlay always lags compositor scrolling — while a
-transparent fixed `.mn-glyph` in the overlay is the click/hover target (hover is
++ popover when narrow. BOTH visuals live in a per-pane `.mn-ear-layer` — an
+own-node absolutely positioned in the rows' container — so they scroll natively
+with the content (a fixed overlay always lags compositor scrolling; sidenotes
+moved in 2026-08-10, same pass that dropped the occlusion check + panel
+MutationObserver: the scroller clips in-layer notes itself, and panel overlays
+paint above the scroller anyway). Sidenotes sit in the gutter no row overlaps,
+so they're directly clickable — the layer swallows raw mouse events like the
+overlay root does. The dog-ear paints BEHIND the row text, so it alone keeps a
+transparent fixed `.mn-glyph` in the overlay as its click/hover target (hover
 relayed via a class). Behind-the-text painting is DOM order, NOT negative
 z-index (that sinks below the panel's opaque ancestor bg — verified live): rows
 are `position:relative` z-auto, so the `.mn-ear-layer` is kept FIRST child of
@@ -85,8 +90,9 @@ Verified live on the web client, 0.0.18 / desktop v1.0.18 era (2026-08-03):
   pane's `getElement()` subtree — both exist on the live client. **`getElement()`
   returns an inner editor node, NOT the `.panel.panel-normal` wrapper** (verified live
   2026-08-05): fine for scoped anchor lookups, but anything that must see panel-level
-  overlays (e.g. the occlusion MutationObserver) walks up with `.closest(".panel")`
-  first. The same record split into two panes renders the note once
+  overlays walks up with `.closest(".panel")` first (the occlusion MutationObserver
+  that needed this was removed 2026-08-10 with the move to in-scroller notes).
+  The same record split into two panes renders the note once
   per pane, each glyph at its own pane's row edge; navigating one pane away drops just
   that pane's notes (`panel.closed` is also subscribed now). Tree/margin mutual
   exclusion is per pane. Fallbacks: no `getPanels` → single active panel; no panel
