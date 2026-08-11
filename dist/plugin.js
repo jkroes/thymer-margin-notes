@@ -37,7 +37,7 @@ var plugins = (() => {
   .mn-note:hover { color: #e0b87d; }
   .mn-glyph { position: fixed; width: 24px; height: 24px; padding: 0; border: 0;
     background: transparent; cursor: pointer; }
-  .mn-ear-layer { position: relative; width: 0; height: 0; pointer-events: none; }
+  .mn-ear-layer { position: relative; width: 100%; height: 0; pointer-events: none; }
   .mn-ear { position: absolute; width: 20px; height: 20px;
     background: color-mix(in srgb, var(--ed-text-color, #888) 16%, transparent);
     clip-path: polygon(100% 0, 0 0, 100% 100%);
@@ -113,7 +113,10 @@ var plugins = (() => {
       for (const ev of ["lineitem.created", "lineitem.updated", "lineitem.moved", "lineitem.deleted", "lineitem.undeleted"])
         this._handlers.push(this.events.on(ev, () => this._refreshSoon(300)));
       this._onScroll = () => this._reposition();
-      this._onResize = () => this._refreshSoon(150);
+      this._onResize = () => {
+        this._reposition();
+        this._refreshSoon(150);
+      };
       document.addEventListener("scroll", this._onScroll, { capture: true, passive: true });
       window.addEventListener("resize", this._onResize);
       this._tick = setInterval(() => this._reposition(), 1200);
@@ -380,9 +383,10 @@ var plugins = (() => {
           r.el.style.display = "";
           r.el.className = "mn-note";
           r.el.textContent = r.note.text || "(empty note)";
-          r.el.style.right = "";
-          r.el.style.width = Math.min(gutter - 30, NOTE_WIDTH_MAX) + "px";
-          r.el.style.left = rect.right + 14 - lr.left + "px";
+          const w = Math.min(gutter - 30, NOTE_WIDTH_MAX);
+          r.el.style.left = "";
+          r.el.style.width = w + "px";
+          r.el.style.right = lr.right - rect.right - 14 - w + "px";
           let top = rect.top - lr.top + r.index * 18;
           const lastBottom = lastBottoms.get(layer) ?? -1e9;
           if (top < lastBottom + 8) top = lastBottom + 8;
@@ -460,7 +464,8 @@ var plugins = (() => {
       }
       const lr = layer.getBoundingClientRect();
       r.earEl.style.display = "";
-      r.earEl.style.left = rect.right - lr.left - 20 + "px";
+      r.earEl.style.left = "";
+      r.earEl.style.right = lr.right - rect.right + "px";
       r.earEl.style.top = earTop - lr.top + "px";
     }
     // ---- popover (narrow mode) ----

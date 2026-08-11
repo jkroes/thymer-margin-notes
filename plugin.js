@@ -26,7 +26,7 @@ const CSS = `
   .mn-note:hover { color: #e0b87d; }
   .mn-glyph { position: fixed; width: 24px; height: 24px; padding: 0; border: 0;
     background: transparent; cursor: pointer; }
-  .mn-ear-layer { position: relative; width: 0; height: 0; pointer-events: none; }
+  .mn-ear-layer { position: relative; width: 100%; height: 0; pointer-events: none; }
   .mn-ear { position: absolute; width: 20px; height: 20px;
     background: color-mix(in srgb, var(--ed-text-color, #888) 16%, transparent);
     clip-path: polygon(100% 0, 0 0, 100% 100%);
@@ -112,7 +112,10 @@ export class Plugin extends AppPlugin {
             this._handlers.push(this.events.on(ev, () => this._refreshSoon(300)));
 
         this._onScroll = () => this._reposition();
-        this._onResize = () => this._refreshSoon(150);
+        // Reposition synchronously on every resize event so notes/ears track a
+        // live window drag frame by frame; the debounced refresh still follows
+        // for mode flips (side <-> narrow) and rewrapped-model changes.
+        this._onResize = () => { this._reposition(); this._refreshSoon(150); };
         document.addEventListener("scroll", this._onScroll, { capture: true, passive: true });
         window.addEventListener("resize", this._onResize);
 
@@ -391,9 +394,14 @@ export class Plugin extends AppPlugin {
                 r.el.style.display = "";
                 r.el.className = "mn-note";
                 r.el.textContent = r.note.text || "(empty note)";
-                r.el.style.right = "";
-                r.el.style.width = Math.min(gutter - 30, NOTE_WIDTH_MAX) + "px";
-                r.el.style.left = rect.right + 14 - lr.left + "px";
+                // Right-anchored inside the full-width layer: the offset from the
+                // layer's right edge is resize-invariant (rows and their container
+                // reflow together), so CSS keeps the note glued to the moving edge
+                // in real time during a window drag, between reposition passes.
+                const w = Math.min(gutter - 30, NOTE_WIDTH_MAX);
+                r.el.style.left = "";
+                r.el.style.width = w + "px";
+                r.el.style.right = lr.right - rect.right - 14 - w + "px";
                 let top = rect.top - lr.top + r.index * 18;
                 const lastBottom = lastBottoms.get(layer) ?? -1e9;
                 if (top < lastBottom + 8) top = lastBottom + 8;
@@ -474,9 +482,13 @@ export class Plugin extends AppPlugin {
             earTop = line.top + Math.max(0, (line.height - fs) / 2);
             break;
         }
+        // Right-anchored for the same reason as the sidenote: the layer-right →
+        // row-right delta survives a live resize, so the fold tracks the edge
+        // via CSS while the window is being dragged.
         const lr = layer.getBoundingClientRect();
         r.earEl.style.display = "";
-        r.earEl.style.left = rect.right - lr.left - 20 + "px";
+        r.earEl.style.left = "";
+        r.earEl.style.right = lr.right - rect.right + "px";
         r.earEl.style.top = earTop - lr.top + "px";
     }
 
