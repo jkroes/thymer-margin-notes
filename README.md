@@ -71,5 +71,4 @@ it's a hard stop). So the plugin only ever rewrites a line's *content*, never
 adds, deletes, or moves lines. Clearing a note empties it to the bare `#ctx` marker,
 and removing the line is left to you, in the outline, where undo can see it.
 
-Built against the 0.0.18-era client (2026-08). Development notes and live-verified API
-quirks are in `CLAUDE.md`.
+Built against the 0.0.18-era client (2026-08).
